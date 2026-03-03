@@ -11,9 +11,10 @@ interface ChatPanelProps {
   isLoading: boolean;
   onSend: (message: string, images?: string[]) => void;
   onReset: () => void;
+  placeholders?: string[];
 }
 
-export default function ChatPanel({ messages, isLoading, onSend, onReset }: ChatPanelProps) {
+export default function ChatPanel({ messages, isLoading, onSend, onReset, placeholders }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [pendingImages, setPendingImages] = useState<{ base64: string; preview: string }[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -51,31 +52,25 @@ export default function ChatPanel({ messages, isLoading, onSend, onReset }: Chat
     });
   };
 
-  return (
-    <div className="w-[380px] border-r border-border flex flex-col bg-card h-full">
-      {/* Header */}
-      <div className="p-4 border-b border-border flex items-start justify-between">
-        <div>
-          <h2 className="text-lg font-bold text-foreground">👁️ Vision Architect</h2>
-          <p className="text-xs text-muted-foreground">I see the room. Describe or show me what you want.</p>
-        </div>
-        <Button variant="ghost" size="icon" onClick={onReset} title="Reset room & chat">
-          <RotateCcw className="w-4 h-4" />
-        </Button>
-      </div>
+  const defaultPlaceholders = [
+    '"Add a 3-seater sofa against the back wall"',
+    '"Make an L-shaped seating area in the corner"',
+    '"Put a kitchen island in the center"',
+    '📷 "Make my room look like this" + image',
+  ];
 
+  const hints = placeholders || defaultPlaceholders;
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 && (
-          <div className="text-sm text-muted-foreground space-y-2 mt-8">
-            <p className="font-medium text-foreground">🎯 I can see the room canvas!</p>
-            <p className="text-xs">I take a screenshot before each action to visually understand the layout.</p>
-            <p className="font-medium text-foreground mt-4">Try saying:</p>
-            <p className="bg-muted rounded px-3 py-2">"Add a 3-seater sofa against the back wall"</p>
-            <p className="bg-muted rounded px-3 py-2">"Make an L-shaped seating area in the corner"</p>
-            <p className="bg-muted rounded px-3 py-2">"Put a kitchen island in the center"</p>
-            <p className="font-medium text-foreground mt-4">Or upload a photo:</p>
-            <p className="bg-muted rounded px-3 py-2">📷 "Make my room look like this" + image</p>
+          <div className="text-sm text-muted-foreground space-y-2 mt-4">
+            <p className="font-medium text-foreground">🎯 Try saying:</p>
+            {hints.map((h, i) => (
+              <p key={i} className="bg-muted rounded px-3 py-2 text-xs">{h}</p>
+            ))}
           </div>
         )}
 
@@ -91,7 +86,6 @@ export default function ChatPanel({ messages, isLoading, onSend, onReset }: Chat
                   : "bg-muted text-foreground"
               }`}
             >
-              {/* Show uploaded images */}
               {msg.images && msg.images.length > 0 && (
                 <div className="flex gap-1 mb-2 flex-wrap">
                   {msg.images.map((img, i) => (
@@ -119,7 +113,7 @@ export default function ChatPanel({ messages, isLoading, onSend, onReset }: Chat
           <div className="flex justify-start">
             <div className="bg-muted rounded-lg px-3 py-2 flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin" />
-              👁️ Looking at the room & designing...
+              🤖 Designing...
             </div>
           </div>
         )}
@@ -169,6 +163,9 @@ export default function ChatPanel({ messages, isLoading, onSend, onReset }: Chat
           disabled={isLoading}
           className="flex-1"
         />
+        <Button type="button" variant="ghost" size="icon" onClick={onReset} title="Reset">
+          <RotateCcw className="w-4 h-4" />
+        </Button>
         <Button type="submit" size="icon" disabled={isLoading || (!input.trim() && pendingImages.length === 0)}>
           <Send className="w-4 h-4" />
         </Button>
