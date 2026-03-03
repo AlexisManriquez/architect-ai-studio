@@ -22,123 +22,31 @@ const ASSET_CATALOG: Record<string, { label: string; width: number; height: numb
   "cabinet": { label: "Cabinet", width: 80, height: 50 },
   "window": { label: "Window", width: 100, height: 15, isWallElement: true },
   "doorway": { label: "Doorway", width: 90, height: 15, isWallElement: true },
+  "bed-king": { label: "King Bed", width: 200, height: 210 },
+  "bed-queen": { label: "Queen Bed", width: 160, height: 210 },
+  "bed-twin": { label: "Twin Bed", width: 100, height: 200 },
+  "nightstand": { label: "Nightstand", width: 50, height: 45 },
+  "dresser": { label: "Dresser", width: 120, height: 50 },
+  "desk": { label: "Desk", width: 140, height: 70 },
+  "office-chair": { label: "Office Chair", width: 55, height: 55 },
+  "bathtub": { label: "Bathtub", width: 170, height: 75 },
+  "shower": { label: "Shower", width: 90, height: 90 },
+  "toilet": { label: "Toilet", width: 40, height: 70 },
+  "sink-bathroom": { label: "Bathroom Sink", width: 60, height: 45 },
+  "sink-kitchen": { label: "Kitchen Sink", width: 80, height: 60 },
+  "refrigerator": { label: "Refrigerator", width: 80, height: 75 },
+  "stove": { label: "Stove/Oven", width: 75, height: 65 },
+  "dishwasher": { label: "Dishwasher", width: 60, height: 60 },
+  "washer": { label: "Washer", width: 65, height: 65 },
+  "dryer": { label: "Dryer", width: 65, height: 65 },
+  "wardrobe": { label: "Wardrobe", width: 120, height: 60 },
 };
 
-// ─── Tool Definitions (Sub-Agent Pattern) ───────────────────────────────────
-// Each tool is a focused sub-agent with a single responsibility.
-// The orchestrator (main AI) calls them in sequence as needed.
-
-const tools = [
-  // Sub-agent 1: Spatial Validator — checks placement feasibility
-  {
-    type: "function",
-    function: {
-      name: "validate_placement",
-      description:
-        "ALWAYS call this before place_item or move_item. Checks if a position is valid (no wall clipping, no overlaps). Returns { valid: true } or { valid: false, reason: '...' }.",
-      parameters: {
-        type: "object",
-        properties: {
-          item_type: { type: "string", enum: Object.keys(ASSET_CATALOG) },
-          x: { type: "number", description: "X position in cm from left wall" },
-          y: { type: "number", description: "Y position in cm from back wall" },
-          rotation: { type: "number", enum: [0, 90, 180, 270] },
-          exclude_item_id: { type: "string", description: "Item ID to exclude from overlap check (use when validating a move)" },
-        },
-        required: ["item_type", "x", "y", "rotation"],
-        additionalProperties: false,
-      },
-    },
-  },
-  // Sub-agent 2: Placer — places new items
-  {
-    type: "function",
-    function: {
-      name: "place_item",
-      description: "Place a NEW furniture item. x,y = top-left corner in cm. Validates automatically — returns error if placement is invalid.",
-      parameters: {
-        type: "object",
-        properties: {
-          item_type: { type: "string", enum: Object.keys(ASSET_CATALOG) },
-          x: { type: "number", description: "X position in cm from left wall" },
-          y: { type: "number", description: "Y position in cm from back wall" },
-          rotation: { type: "number", enum: [0, 90, 180, 270] },
-        },
-        required: ["item_type", "x", "y", "rotation"],
-        additionalProperties: false,
-      },
-    },
-  },
-  // Sub-agent 3: Mover — absolute repositioning
-  {
-    type: "function",
-    function: {
-      name: "move_item",
-      description: "Move an existing item to an ABSOLUTE position (x, y in cm). Use for precise repositioning.",
-      parameters: {
-        type: "object",
-        properties: {
-          item_id: { type: "string", description: "The ID of the item to move" },
-          x: { type: "number", description: "New X position in cm" },
-          y: { type: "number", description: "New Y position in cm" },
-          rotation: { type: "number", enum: [0, 90, 180, 270] },
-        },
-        required: ["item_id", "x", "y", "rotation"],
-        additionalProperties: false,
-      },
-    },
-  },
-  // Sub-agent 4: Nudger — relative movement for fine adjustments
-  {
-    type: "function",
-    function: {
-      name: "nudge_item",
-      description:
-        "Move an item by a RELATIVE offset. Use for small adjustments like 'move it 30cm to the left' or 'nudge it north a bit'. dx negative = left, dx positive = right, dy negative = up/north, dy positive = down/south. Optionally change rotation.",
-      parameters: {
-        type: "object",
-        properties: {
-          item_id: { type: "string", description: "The ID of the item to nudge" },
-          dx: { type: "number", description: "Horizontal offset in cm (negative = left, positive = right)" },
-          dy: { type: "number", description: "Vertical offset in cm (negative = north/up, positive = south/down)" },
-          rotation: { type: "number", enum: [0, 90, 180, 270], description: "New rotation (optional, keeps current if omitted)" },
-        },
-        required: ["item_id", "dx", "dy"],
-        additionalProperties: false,
-      },
-    },
-  },
-  // Sub-agent 5: Remover — removes items
-  {
-    type: "function",
-    function: {
-      name: "remove_item",
-      description: "Remove an item from the room by its ID.",
-      parameters: {
-        type: "object",
-        properties: {
-          item_id: { type: "string", description: "The ID of the item to remove" },
-        },
-        required: ["item_id"],
-        additionalProperties: false,
-      },
-    },
-  },
-  // Sub-agent 6: Inspector — lists current items for reference
-  {
-    type: "function",
-    function: {
-      name: "list_items",
-      description: "Returns a list of all currently placed items with their IDs, types, positions, and dimensions. Use this to find item IDs before moving/nudging/removing them.",
-      parameters: {
-        type: "object",
-        properties: {},
-        required: [],
-        additionalProperties: false,
-      },
-    },
-  },
-];
+// ─── Room types ─────────────────────────────────────────────────────────────
+const ROOM_TYPES = [
+  "living-room", "bedroom", "bathroom", "kitchen", "dining-room",
+  "office", "garage", "hallway", "closet", "laundry", "entry",
+] as const;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 interface PlacedItem {
@@ -155,7 +63,340 @@ interface RoomState {
   items: PlacedItem[];
 }
 
-// ─── Collision Detection Sub-Agent ──────────────────────────────────────────
+interface FloorPlanRoom {
+  id: string;
+  name: string;
+  type: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface FloorPlanDoor {
+  id: string;
+  roomId1: string;
+  roomId2: string;
+  x: number;
+  y: number;
+  width: number;
+  orientation: "horizontal" | "vertical";
+}
+
+interface FloorPlanWindow {
+  id: string;
+  roomId: string;
+  x: number;
+  y: number;
+  width: number;
+  orientation: "horizontal" | "vertical";
+  wall: "north" | "south" | "east" | "west";
+}
+
+interface FloorPlan {
+  id: string;
+  name: string;
+  totalWidth: number;
+  totalHeight: number;
+  rooms: FloorPlanRoom[];
+  doors: FloorPlanDoor[];
+  windows: FloorPlanWindow[];
+}
+
+function generateId() {
+  return crypto.randomUUID().slice(0, 8);
+}
+
+// ─── Floor Plan Tools ───────────────────────────────────────────────────────
+
+const floorPlanTools = [
+  {
+    type: "function",
+    function: {
+      name: "generate_floor_plan",
+      description: "Generate a complete floor plan from a description. Creates rooms, doors, and windows. Use for prompts like '3 bedroom 2 bath house' or 'open concept studio'. Returns the full floor plan.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Name for the floor plan" },
+          rooms: {
+            type: "array",
+            description: "Array of rooms to create. Position them so they tile together without gaps/overlaps. All coordinates in cm.",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                type: { type: "string", enum: [...ROOM_TYPES] },
+                x: { type: "number", description: "X position in cm" },
+                y: { type: "number", description: "Y position in cm" },
+                width: { type: "number", description: "Width in cm" },
+                height: { type: "number", description: "Height in cm" },
+              },
+              required: ["name", "type", "x", "y", "width", "height"],
+              additionalProperties: false,
+            },
+          },
+          doors: {
+            type: "array",
+            description: "Doors between rooms or to exterior. Place on shared walls between adjacent rooms.",
+            items: {
+              type: "object",
+              properties: {
+                roomId1_index: { type: "number", description: "Index of first room in rooms array" },
+                roomId2_index: { type: "number", description: "Index of second room (-1 for exterior)" },
+                x: { type: "number", description: "X position of door" },
+                y: { type: "number", description: "Y position of door" },
+                width: { type: "number", description: "Door width in cm (typically 90)" },
+                orientation: { type: "string", enum: ["horizontal", "vertical"] },
+              },
+              required: ["roomId1_index", "roomId2_index", "x", "y", "width", "orientation"],
+              additionalProperties: false,
+            },
+          },
+          windows: {
+            type: "array",
+            description: "Windows on exterior walls.",
+            items: {
+              type: "object",
+              properties: {
+                roomId_index: { type: "number", description: "Index of room in rooms array" },
+                x: { type: "number", description: "X position" },
+                y: { type: "number", description: "Y position" },
+                width: { type: "number", description: "Window width in cm (typically 100-120)" },
+                orientation: { type: "string", enum: ["horizontal", "vertical"] },
+                wall: { type: "string", enum: ["north", "south", "east", "west"] },
+              },
+              required: ["roomId_index", "x", "y", "width", "orientation", "wall"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["name", "rooms", "doors", "windows"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "add_room",
+      description: "Add a single room to the existing floor plan.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          type: { type: "string", enum: [...ROOM_TYPES] },
+          x: { type: "number" },
+          y: { type: "number" },
+          width: { type: "number" },
+          height: { type: "number" },
+        },
+        required: ["name", "type", "x", "y", "width", "height"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "resize_room",
+      description: "Resize an existing room by ID. Adjusts width and/or height.",
+      parameters: {
+        type: "object",
+        properties: {
+          room_id: { type: "string" },
+          width: { type: "number", description: "New width in cm (optional)" },
+          height: { type: "number", description: "New height in cm (optional)" },
+          x: { type: "number", description: "New x position (optional, for repositioning after resize)" },
+          y: { type: "number", description: "New y position (optional)" },
+        },
+        required: ["room_id"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "move_room",
+      description: "Move a room to a new position.",
+      parameters: {
+        type: "object",
+        properties: {
+          room_id: { type: "string" },
+          x: { type: "number" },
+          y: { type: "number" },
+        },
+        required: ["room_id", "x", "y"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "remove_room",
+      description: "Remove a room from the floor plan by ID.",
+      parameters: {
+        type: "object",
+        properties: {
+          room_id: { type: "string" },
+        },
+        required: ["room_id"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "add_door",
+      description: "Add a door between two rooms or to exterior.",
+      parameters: {
+        type: "object",
+        properties: {
+          room_id_1: { type: "string" },
+          room_id_2: { type: "string", description: "Second room ID or 'exterior'" },
+          x: { type: "number" },
+          y: { type: "number" },
+          width: { type: "number" },
+          orientation: { type: "string", enum: ["horizontal", "vertical"] },
+        },
+        required: ["room_id_1", "room_id_2", "x", "y", "width", "orientation"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "add_window",
+      description: "Add a window to a room's exterior wall.",
+      parameters: {
+        type: "object",
+        properties: {
+          room_id: { type: "string" },
+          x: { type: "number" },
+          y: { type: "number" },
+          width: { type: "number" },
+          orientation: { type: "string", enum: ["horizontal", "vertical"] },
+          wall: { type: "string", enum: ["north", "south", "east", "west"] },
+        },
+        required: ["room_id", "x", "y", "width", "orientation", "wall"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_rooms",
+      description: "List all rooms in the floor plan with their IDs, positions, and dimensions.",
+      parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+    },
+  },
+];
+
+// ─── Furniture Tools (existing) ─────────────────────────────────────────────
+
+const furnitureTools = [
+  {
+    type: "function",
+    function: {
+      name: "validate_placement",
+      description: "Check if a furniture position is valid (no clipping, no overlaps). Call before place_item.",
+      parameters: {
+        type: "object",
+        properties: {
+          item_type: { type: "string", enum: Object.keys(ASSET_CATALOG) },
+          x: { type: "number" },
+          y: { type: "number" },
+          rotation: { type: "number", enum: [0, 90, 180, 270] },
+          exclude_item_id: { type: "string" },
+        },
+        required: ["item_type", "x", "y", "rotation"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "place_item",
+      description: "Place new furniture. x,y = top-left corner in cm.",
+      parameters: {
+        type: "object",
+        properties: {
+          item_type: { type: "string", enum: Object.keys(ASSET_CATALOG) },
+          x: { type: "number" },
+          y: { type: "number" },
+          rotation: { type: "number", enum: [0, 90, 180, 270] },
+        },
+        required: ["item_type", "x", "y", "rotation"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "move_item",
+      description: "Move furniture to absolute position.",
+      parameters: {
+        type: "object",
+        properties: {
+          item_id: { type: "string" },
+          x: { type: "number" },
+          y: { type: "number" },
+          rotation: { type: "number", enum: [0, 90, 180, 270] },
+        },
+        required: ["item_id", "x", "y", "rotation"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "nudge_item",
+      description: "Move furniture by relative offset. dx neg=left, pos=right. dy neg=north, pos=south.",
+      parameters: {
+        type: "object",
+        properties: {
+          item_id: { type: "string" },
+          dx: { type: "number" },
+          dy: { type: "number" },
+          rotation: { type: "number", enum: [0, 90, 180, 270] },
+        },
+        required: ["item_id", "dx", "dy"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "remove_item",
+      description: "Remove furniture by ID.",
+      parameters: {
+        type: "object",
+        properties: { item_id: { type: "string" } },
+        required: ["item_id"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_items",
+      description: "List all placed furniture with IDs and positions.",
+      parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+    },
+  },
+];
+
+// ─── Collision Detection ────────────────────────────────────────────────────
 function getItemBounds(type: string, x: number, y: number, rotation: number) {
   const def = ASSET_CATALOG[type];
   if (!def) return null;
@@ -166,172 +407,256 @@ function getItemBounds(type: string, x: number, y: number, rotation: number) {
 }
 
 function validatePlacement(
-  roomState: RoomState,
-  itemType: string,
-  x: number,
-  y: number,
-  rotation: number,
-  excludeId?: string
+  roomState: RoomState, itemType: string, x: number, y: number, rotation: number, excludeId?: string
 ): { valid: boolean; reason?: string } {
   const bounds = getItemBounds(itemType, x, y, rotation);
   if (!bounds) return { valid: false, reason: `Unknown item type: ${itemType}` };
-
-  // Wall clipping check
   if (bounds.x < 0 || bounds.y < 0 || bounds.x2 > roomState.roomWidth || bounds.y2 > roomState.roomDepth) {
-    return {
-      valid: false,
-      reason: `Item clips room bounds. Room: ${roomState.roomWidth}×${roomState.roomDepth}cm. Item would span (${bounds.x},${bounds.y}) to (${bounds.x2},${bounds.y2}). Adjust position so item stays within 0-${roomState.roomWidth} on X and 0-${roomState.roomDepth} on Y.`,
-    };
+    return { valid: false, reason: `Item clips room bounds. Room: ${roomState.roomWidth}×${roomState.roomDepth}cm. Item: (${bounds.x},${bounds.y}) to (${bounds.x2},${bounds.y2}).` };
   }
-
-  // Overlap check
   for (const item of roomState.items) {
     if (excludeId && item.id === excludeId) continue;
     const other = getItemBounds(item.type, item.x, item.y, item.rotation);
     if (!other) continue;
     if (bounds.x < other.x2 && bounds.x2 > other.x && bounds.y < other.y2 && bounds.y2 > other.y) {
-      return {
-        valid: false,
-        reason: `Overlaps with ${ASSET_CATALOG[item.type]?.label || item.type} (id: ${item.id}) at (${item.x},${item.y}). Try offset of at least ${Math.max(other.x2 - bounds.x, other.y2 - bounds.y)}cm.`,
-      };
+      return { valid: false, reason: `Overlaps with ${ASSET_CATALOG[item.type]?.label || item.type} (id: ${item.id}).` };
     }
   }
-
   return { valid: true };
 }
 
-function generateId() {
-  return crypto.randomUUID().slice(0, 8);
+// ─── Floor Plan Tool Processor ──────────────────────────────────────────────
+function processFloorPlanTool(
+  name: string, args: Record<string, unknown>, floorPlan: FloorPlan
+): { result: string; floorPlan: FloorPlan; action?: string } {
+  switch (name) {
+    case "generate_floor_plan": {
+      const rooms: FloorPlanRoom[] = (args.rooms as any[]).map((r, i) => ({
+        id: generateId(),
+        name: r.name,
+        type: r.type,
+        x: Math.round(r.x),
+        y: Math.round(r.y),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+      }));
+
+      const totalWidth = Math.max(...rooms.map(r => r.x + r.width));
+      const totalHeight = Math.max(...rooms.map(r => r.y + r.height));
+
+      const doors: FloorPlanDoor[] = ((args.doors as any[]) || []).map((d) => ({
+        id: generateId(),
+        roomId1: d.roomId1_index >= 0 ? rooms[d.roomId1_index]?.id || "exterior" : "exterior",
+        roomId2: d.roomId2_index >= 0 ? rooms[d.roomId2_index]?.id || "exterior" : "exterior",
+        x: Math.round(d.x),
+        y: Math.round(d.y),
+        width: Math.round(d.width),
+        orientation: d.orientation,
+      }));
+
+      const windows: FloorPlanWindow[] = ((args.windows as any[]) || []).map((w) => ({
+        id: generateId(),
+        roomId: w.roomId_index >= 0 ? rooms[w.roomId_index]?.id || "" : "",
+        x: Math.round(w.x),
+        y: Math.round(w.y),
+        width: Math.round(w.width),
+        orientation: w.orientation,
+        wall: w.wall,
+      }));
+
+      const newPlan: FloorPlan = {
+        id: generateId(),
+        name: (args.name as string) || "Floor Plan",
+        totalWidth,
+        totalHeight,
+        rooms,
+        doors,
+        windows,
+      };
+
+      const totalSqft = rooms.reduce((s, r) => s + Math.round((r.width * r.height) / 929), 0);
+      return {
+        result: JSON.stringify({ success: true, rooms: rooms.length, doors: doors.length, windows: windows.length, totalSqft }),
+        floorPlan: newPlan,
+        action: `Generated "${newPlan.name}" — ${rooms.length} rooms, ~${totalSqft} sqft`,
+      };
+    }
+
+    case "add_room": {
+      const id = generateId();
+      const room: FloorPlanRoom = {
+        id,
+        name: args.name as string,
+        type: args.type as string,
+        x: Math.round(args.x as number),
+        y: Math.round(args.y as number),
+        width: Math.round(args.width as number),
+        height: Math.round(args.height as number),
+      };
+      const updated = {
+        ...floorPlan,
+        rooms: [...floorPlan.rooms, room],
+        totalWidth: Math.max(floorPlan.totalWidth, room.x + room.width),
+        totalHeight: Math.max(floorPlan.totalHeight, room.y + room.height),
+      };
+      return { result: JSON.stringify({ success: true, room_id: id }), floorPlan: updated, action: `Added ${room.name}` };
+    }
+
+    case "resize_room": {
+      const roomId = args.room_id as string;
+      const room = floorPlan.rooms.find(r => r.id === roomId);
+      if (!room) return { result: JSON.stringify({ success: false, reason: "Room not found" }), floorPlan };
+      const updated = {
+        ...floorPlan,
+        rooms: floorPlan.rooms.map(r => r.id === roomId ? {
+          ...r,
+          width: args.width != null ? Math.round(args.width as number) : r.width,
+          height: args.height != null ? Math.round(args.height as number) : r.height,
+          x: args.x != null ? Math.round(args.x as number) : r.x,
+          y: args.y != null ? Math.round(args.y as number) : r.y,
+        } : r),
+      };
+      // Recalculate bounds
+      updated.totalWidth = Math.max(...updated.rooms.map(r => r.x + r.width));
+      updated.totalHeight = Math.max(...updated.rooms.map(r => r.y + r.height));
+      return { result: JSON.stringify({ success: true }), floorPlan: updated, action: `Resized ${room.name}` };
+    }
+
+    case "move_room": {
+      const roomId = args.room_id as string;
+      const room = floorPlan.rooms.find(r => r.id === roomId);
+      if (!room) return { result: JSON.stringify({ success: false, reason: "Room not found" }), floorPlan };
+      const updated = {
+        ...floorPlan,
+        rooms: floorPlan.rooms.map(r => r.id === roomId ? {
+          ...r, x: Math.round(args.x as number), y: Math.round(args.y as number),
+        } : r),
+      };
+      updated.totalWidth = Math.max(...updated.rooms.map(r => r.x + r.width));
+      updated.totalHeight = Math.max(...updated.rooms.map(r => r.y + r.height));
+      return { result: JSON.stringify({ success: true }), floorPlan: updated, action: `Moved ${room.name}` };
+    }
+
+    case "remove_room": {
+      const roomId = args.room_id as string;
+      const room = floorPlan.rooms.find(r => r.id === roomId);
+      if (!room) return { result: JSON.stringify({ success: false, reason: "Room not found" }), floorPlan };
+      const updated = {
+        ...floorPlan,
+        rooms: floorPlan.rooms.filter(r => r.id !== roomId),
+        doors: floorPlan.doors.filter(d => d.roomId1 !== roomId && d.roomId2 !== roomId),
+        windows: floorPlan.windows.filter(w => w.roomId !== roomId),
+      };
+      if (updated.rooms.length > 0) {
+        updated.totalWidth = Math.max(...updated.rooms.map(r => r.x + r.width));
+        updated.totalHeight = Math.max(...updated.rooms.map(r => r.y + r.height));
+      }
+      return { result: JSON.stringify({ success: true }), floorPlan: updated, action: `Removed ${room.name}` };
+    }
+
+    case "add_door": {
+      const door: FloorPlanDoor = {
+        id: generateId(),
+        roomId1: args.room_id_1 as string,
+        roomId2: args.room_id_2 as string,
+        x: Math.round(args.x as number),
+        y: Math.round(args.y as number),
+        width: Math.round(args.width as number),
+        orientation: args.orientation as "horizontal" | "vertical",
+      };
+      return {
+        result: JSON.stringify({ success: true, door_id: door.id }),
+        floorPlan: { ...floorPlan, doors: [...floorPlan.doors, door] },
+        action: `Added door`,
+      };
+    }
+
+    case "add_window": {
+      const win: FloorPlanWindow = {
+        id: generateId(),
+        roomId: args.room_id as string,
+        x: Math.round(args.x as number),
+        y: Math.round(args.y as number),
+        width: Math.round(args.width as number),
+        orientation: args.orientation as "horizontal" | "vertical",
+        wall: args.wall as "north" | "south" | "east" | "west",
+      };
+      return {
+        result: JSON.stringify({ success: true, window_id: win.id }),
+        floorPlan: { ...floorPlan, windows: [...floorPlan.windows, win] },
+        action: `Added window`,
+      };
+    }
+
+    case "list_rooms": {
+      const roomList = floorPlan.rooms.map(r => ({
+        id: r.id, name: r.name, type: r.type,
+        position: { x: r.x, y: r.y }, size: { width: r.width, height: r.height },
+        sqft: Math.round((r.width * r.height) / 929),
+      }));
+      return { result: JSON.stringify({ rooms: roomList, doors: floorPlan.doors.length, windows: floorPlan.windows.length }), floorPlan };
+    }
+
+    default:
+      return { result: JSON.stringify({ error: `Unknown tool: ${name}` }), floorPlan };
+  }
 }
 
-// ─── Tool Call Processor ────────────────────────────────────────────────────
-function processToolCall(
-  name: string,
-  args: Record<string, unknown>,
-  roomState: RoomState
+// ─── Furniture Tool Processor ───────────────────────────────────────────────
+function processFurnitureTool(
+  name: string, args: Record<string, unknown>, roomState: RoomState
 ): { result: string; roomState: RoomState; action?: string } {
   switch (name) {
     case "validate_placement": {
-      const r = validatePlacement(
-        roomState,
-        args.item_type as string,
-        args.x as number,
-        args.y as number,
-        args.rotation as number,
-        args.exclude_item_id as string | undefined
-      );
+      const r = validatePlacement(roomState, args.item_type as string, args.x as number, args.y as number, args.rotation as number, args.exclude_item_id as string | undefined);
       return { result: JSON.stringify(r), roomState };
     }
-
     case "place_item": {
       const itemType = args.item_type as string;
       const x = Math.round(args.x as number);
       const y = Math.round(args.y as number);
       const rotation = args.rotation as number;
-
       const validation = validatePlacement(roomState, itemType, x, y, rotation);
-      if (!validation.valid) {
-        return { result: JSON.stringify({ success: false, reason: validation.reason }), roomState };
-      }
+      if (!validation.valid) return { result: JSON.stringify({ success: false, reason: validation.reason }), roomState };
       const id = generateId();
       const newItem: PlacedItem = { id, type: itemType, x, y, rotation };
-      const updated = { ...roomState, items: [...roomState.items, newItem] };
       const label = ASSET_CATALOG[newItem.type]?.label || newItem.type;
-      return {
-        result: JSON.stringify({ success: true, item_id: id, label, position: { x, y }, rotation }),
-        roomState: updated,
-        action: `Placed ${label} at (${x}, ${y})`,
-      };
+      return { result: JSON.stringify({ success: true, item_id: id, label }), roomState: { ...roomState, items: [...roomState.items, newItem] }, action: `Placed ${label} at (${x}, ${y})` };
     }
-
     case "remove_item": {
       const itemId = args.item_id as string;
-      const exists = roomState.items.find((i) => i.id === itemId);
-      if (!exists) {
-        return { result: JSON.stringify({ success: false, reason: `Item '${itemId}' not found. Use list_items to see current items.` }), roomState };
-      }
+      const exists = roomState.items.find(i => i.id === itemId);
+      if (!exists) return { result: JSON.stringify({ success: false, reason: "Item not found" }), roomState };
       const label = ASSET_CATALOG[exists.type]?.label || exists.type;
-      const updated = { ...roomState, items: roomState.items.filter((i) => i.id !== itemId) };
-      return { result: JSON.stringify({ success: true, removed: label }), roomState: updated, action: `Removed ${label}` };
+      return { result: JSON.stringify({ success: true }), roomState: { ...roomState, items: roomState.items.filter(i => i.id !== itemId) }, action: `Removed ${label}` };
     }
-
     case "move_item": {
-      const moveId = args.item_id as string;
-      const item = roomState.items.find((i) => i.id === moveId);
-      if (!item) {
-        return { result: JSON.stringify({ success: false, reason: `Item '${moveId}' not found. Use list_items to see current items.` }), roomState };
-      }
-      const newX = Math.round(args.x as number);
-      const newY = Math.round(args.y as number);
-      const newRot = args.rotation as number;
-      const moveValidation = validatePlacement(roomState, item.type, newX, newY, newRot, moveId);
-      if (!moveValidation.valid) {
-        return { result: JSON.stringify({ success: false, reason: moveValidation.reason }), roomState };
-      }
-      const movedItem = { ...item, x: newX, y: newY, rotation: newRot };
-      const updated = { ...roomState, items: roomState.items.map((i) => (i.id === moveId ? movedItem : i)) };
+      const item = roomState.items.find(i => i.id === (args.item_id as string));
+      if (!item) return { result: JSON.stringify({ success: false, reason: "Item not found" }), roomState };
+      const x = Math.round(args.x as number), y = Math.round(args.y as number), rot = args.rotation as number;
+      const v = validatePlacement(roomState, item.type, x, y, rot, item.id);
+      if (!v.valid) return { result: JSON.stringify({ success: false, reason: v.reason }), roomState };
       const label = ASSET_CATALOG[item.type]?.label || item.type;
-      return {
-        result: JSON.stringify({ success: true, label, from: { x: item.x, y: item.y }, to: { x: newX, y: newY } }),
-        roomState: updated,
-        action: `Moved ${label} to (${newX}, ${newY})`,
-      };
+      return { result: JSON.stringify({ success: true }), roomState: { ...roomState, items: roomState.items.map(i => i.id === item.id ? { ...i, x, y, rotation: rot } : i) }, action: `Moved ${label} to (${x}, ${y})` };
     }
-
     case "nudge_item": {
-      const nudgeId = args.item_id as string;
-      const item = roomState.items.find((i) => i.id === nudgeId);
-      if (!item) {
-        return { result: JSON.stringify({ success: false, reason: `Item '${nudgeId}' not found. Use list_items to see current items.` }), roomState };
-      }
-      const dx = Math.round(args.dx as number);
-      const dy = Math.round(args.dy as number);
-      const newX = item.x + dx;
-      const newY = item.y + dy;
+      const item = roomState.items.find(i => i.id === (args.item_id as string));
+      if (!item) return { result: JSON.stringify({ success: false, reason: "Item not found" }), roomState };
+      const dx = Math.round(args.dx as number), dy = Math.round(args.dy as number);
+      const newX = item.x + dx, newY = item.y + dy;
       const newRot = (args.rotation as number) ?? item.rotation;
+      const v = validatePlacement(roomState, item.type, newX, newY, newRot, item.id);
+      if (!v.valid) return { result: JSON.stringify({ success: false, reason: v.reason }), roomState };
       const label = ASSET_CATALOG[item.type]?.label || item.type;
-
-      const nudgeValidation = validatePlacement(roomState, item.type, newX, newY, newRot, nudgeId);
-      if (!nudgeValidation.valid) {
-        return {
-          result: JSON.stringify({
-            success: false,
-            reason: nudgeValidation.reason,
-            attempted: { from: { x: item.x, y: item.y }, to: { x: newX, y: newY }, dx, dy },
-          }),
-          roomState,
-        };
-      }
-      const nudgedItem = { ...item, x: newX, y: newY, rotation: newRot };
-      const updated = { ...roomState, items: roomState.items.map((i) => (i.id === nudgeId ? nudgedItem : i)) };
-      return {
-        result: JSON.stringify({ success: true, label, from: { x: item.x, y: item.y }, to: { x: newX, y: newY }, delta: { dx, dy } }),
-        roomState: updated,
-        action: `Nudged ${label} by (${dx > 0 ? "+" : ""}${dx}, ${dy > 0 ? "+" : ""}${dy})cm`,
-      };
+      return { result: JSON.stringify({ success: true }), roomState: { ...roomState, items: roomState.items.map(i => i.id === item.id ? { ...i, x: newX, y: newY, rotation: newRot } : i) }, action: `Nudged ${label} by (${dx > 0 ? "+" : ""}${dx}, ${dy > 0 ? "+" : ""}${dy})cm` };
     }
-
     case "list_items": {
-      if (roomState.items.length === 0) {
-        return { result: JSON.stringify({ items: [], message: "Room is empty." }), roomState };
-      }
-      const itemList = roomState.items.map((i) => {
+      const items = roomState.items.map(i => {
         const def = ASSET_CATALOG[i.type];
-        const isRotated = i.rotation === 90 || i.rotation === 270;
-        const w = def ? (isRotated ? def.height : def.width) : 0;
-        const h = def ? (isRotated ? def.width : def.height) : 0;
-        return {
-          id: i.id,
-          type: i.type,
-          label: def?.label || i.type,
-          position: { x: i.x, y: i.y },
-          size: { width: w, height: h },
-          rotation: i.rotation,
-        };
+        return { id: i.id, type: i.type, label: def?.label || i.type, position: { x: i.x, y: i.y }, rotation: i.rotation };
       });
-      return { result: JSON.stringify({ items: itemList }), roomState };
+      return { result: JSON.stringify({ items }), roomState };
     }
-
     default:
       return { result: JSON.stringify({ error: `Unknown tool: ${name}` }), roomState };
   }
@@ -348,94 +673,103 @@ function buildUserContent(text: string, images: string[] = []) {
   return parts;
 }
 
-// ─── System Prompt Builder ──────────────────────────────────────────────────
-function buildSystemPrompt(roomState: RoomState): string {
+// ─── System Prompts ─────────────────────────────────────────────────────────
+
+function buildFloorPlanSystemPrompt(floorPlan: FloorPlan): string {
+  const roomsSummary = floorPlan.rooms.length === 0
+    ? "No rooms yet — floor plan is empty."
+    : "CURRENT ROOMS:\n" + floorPlan.rooms.map(r =>
+        `  • ${r.name} [id: ${r.id}] type=${r.type} at (${r.x},${r.y}) ${r.width}×${r.height}cm (~${Math.round((r.width * r.height) / 929)} sqft)`
+      ).join("\n");
+
+  return `You are a professional floor plan architect AI with VISION capabilities. You design house/apartment floor plans by placing rooms, doors, and windows.
+
+YOU HAVE TWO INFORMATION SOURCES:
+1. A SCREENSHOT IMAGE of the current floor plan (visual — look at it!)
+2. PRECISE COORDINATE DATA below (numerical — use for exact positions)
+
+═══ FLOOR PLAN: "${floorPlan.name}" ═══
+Bounding box: ${floorPlan.totalWidth}cm × ${floorPlan.totalHeight}cm
+${roomsSummary}
+Doors: ${floorPlan.doors.length}
+Windows: ${floorPlan.windows.length}
+
+═══ COORDINATE SYSTEM ═══
+Origin (0,0) = top-left corner. X → right, Y → down. All values in cm.
+Room positions are their top-left corner.
+100cm = 1 meter. 1 sqft ≈ 929 cm².
+
+═══ ROOM TYPES AVAILABLE ═══
+${ROOM_TYPES.join(", ")}
+
+═══ DESIGN GUIDELINES ═══
+• Rooms should tile together with shared walls (no gaps between adjacent rooms).
+• Standard room sizes (approximate):
+  - Bedroom: 300×350cm (~113 sqft) to 450×500cm (~242 sqft)
+  - Master bedroom: 400×450cm (~194 sqft) to 500×550cm (~296 sqft)
+  - Bathroom: 200×250cm (~54 sqft) to 300×350cm (~113 sqft)
+  - Kitchen: 300×350cm (~113 sqft) to 400×450cm (~194 sqft)
+  - Living room: 400×450cm (~194 sqft) to 600×500cm (~323 sqft)
+  - Hallway: 120×300cm+ (long and narrow)
+  - Closet: 120×150cm (~19 sqft) to 200×250cm (~54 sqft)
+• Place doors on shared walls between adjacent rooms.
+  - Horizontal doors: placed on horizontal shared edges (same y, different x)
+  - Vertical doors: placed on vertical shared edges (same x, different y)
+• Place windows on exterior walls only.
+• For multi-bedroom plans, use a hallway to connect bedrooms.
+• The entry/front door should face south (bottom of plan).
+
+═══ TOOLS ═══
+1. **generate_floor_plan** — Create an entire floor plan at once. Best for initial generation.
+2. **add_room** / **remove_room** / **resize_room** / **move_room** — Modify individual rooms.
+3. **add_door** / **add_window** — Add connections and openings.
+4. **list_rooms** — Inspect current layout.
+
+═══ RULES ═══
+1. When generating a floor plan, tile rooms edge-to-edge with no gaps.
+2. Doors must be placed at shared wall boundaries between rooms.
+3. All coordinates must be whole numbers.
+4. Be conversational and brief (1-3 sentences after executing actions).
+5. ALWAYS execute tools when the user asks you to DO something.
+6. For sketch/image uploads, interpret the layout visually and recreate it.
+7. If the user mentions square footage, convert: sqft × 929 = cm².
+8. Keep hallways 120-150cm wide minimum.`;
+}
+
+function buildRoomSystemPrompt(roomState: RoomState, roomName: string): string {
   const { roomWidth, roomDepth, items } = roomState;
   const halfW = Math.round(roomWidth / 2);
   const halfD = Math.round(roomDepth / 2);
 
-  const itemsSummary =
-    items.length === 0
-      ? "The room is currently EMPTY — no items placed."
-      : "CURRENT ITEMS:\n" +
-        items
-          .map((i) => {
-            const def = ASSET_CATALOG[i.type];
-            const isRotated = i.rotation === 90 || i.rotation === 270;
-            const w = def ? (isRotated ? def.height : def.width) : 0;
-            const h = def ? (isRotated ? def.width : def.height) : 0;
-            return `  • ${def?.label || i.type} [id: ${i.id}] at (${i.x}, ${i.y}), ${w}×${h}cm, rotation: ${i.rotation}°`;
-          })
-          .join("\n");
+  const itemsSummary = items.length === 0
+    ? "The room is currently EMPTY."
+    : "CURRENT ITEMS:\n" + items.map(i => {
+        const def = ASSET_CATALOG[i.type];
+        return `  • ${def?.label || i.type} [id: ${i.id}] at (${i.x}, ${i.y}), rotation: ${i.rotation}°`;
+      }).join("\n");
 
-  return `You are a professional interior design AI with VISION capabilities. You design room layouts by placing furniture in a 2D floor plan.
+  return `You are a professional interior design AI. You furnish the room "${roomName}" by placing furniture.
 
-YOU HAVE TWO INFORMATION SOURCES:
-1. A SCREENSHOT IMAGE of the current room canvas (visual — look at it!)
-2. PRECISE COORDINATE DATA below (numerical — use for exact positions)
-
-Always cross-reference both. Look at the image to understand spatial relationships, use coordinates for precision.
-
-═══ ROOM SPECS ═══
-Dimensions: ${roomWidth}cm wide × ${roomDepth}cm deep (${roomWidth / 100}m × ${roomDepth / 100}m)
-Walls: 3 walls — back (top, y=0), left (x=0), right (x=${roomWidth}). Bottom (y=${roomDepth}) is OPEN.
-Origin: (0,0) = back-left corner. X → right, Y → down.
-Item anchor: (x,y) = TOP-LEFT corner of bounding box. When rotated 90°/270°, width/height swap.
+═══ ROOM: "${roomName}" ═══
+Dimensions: ${roomWidth}cm × ${roomDepth}cm (${(roomWidth / 100).toFixed(1)}m × ${(roomDepth / 100).toFixed(1)}m)
+Origin: (0,0) = top-left. X → right, Y → down.
+${itemsSummary}
 
 ═══ DIRECTION MAP ═══
-• WEST / LEFT  = x in [0, ${halfW}]
-• EAST / RIGHT = x in [${halfW}, ${roomWidth}]
-• NORTH / BACK = y in [0, ${halfD}]
-• SOUTH / FRONT = y in [${halfD}, ${roomDepth}]
-• CENTER ≈ (${halfW}, ${halfD})
-
-═══ ${itemsSummary} ═══
+WEST/LEFT = low x | EAST/RIGHT = high x | NORTH/BACK = low y | SOUTH/FRONT = high y
+Center ≈ (${halfW}, ${halfD})
 
 ═══ AVAILABLE FURNITURE ═══
-${Object.entries(ASSET_CATALOG)
-  .map(([k, v]) => `• ${k}: "${v.label}" ${v.width}×${v.height}cm`)
-  .join("\n")}
+${Object.entries(ASSET_CATALOG).map(([k, v]) => `• ${k}: "${v.label}" ${v.width}×${v.height}cm`).join("\n")}
 
-═══ TOOL USAGE RULES ═══
-You have 6 tools. Use them as specialized sub-agents:
-
-1. **list_items** — Call FIRST when you need to find an item's ID (before move/nudge/remove).
-2. **validate_placement** — Call BEFORE place_item to check if a position works. Prevents wasted calls.
-3. **place_item** — Place new items. Has built-in validation but calling validate first avoids errors.
-4. **move_item** — Move to ABSOLUTE coordinates. Use for repositioning.
-5. **nudge_item** — Move by RELATIVE offset. Perfect for "move it a bit left" or "shift north 20cm".
-   • dx: negative=left, positive=right
-   • dy: negative=north/up, positive=south/down
-   • "a bit" / "slightly" = ~20-30cm. "a lot" = ~50-100cm.
-6. **remove_item** — Delete an item by ID.
-
-═══ NUDGE / SMALL MOVEMENT GUIDE ═══
-When users say:
-• "nudge/move [item] left/right/up/down" → use nudge_item with appropriate dx/dy
-• "a little/bit/slightly" → 15-30cm offset
-• "more" → 40-60cm offset  
-• "a lot/significantly" → 80-120cm offset
-• "center it" → calculate absolute center position, use move_item
-• "align with [other item]" → use list_items to get positions, then move_item to matching coordinate
-
-═══ PLACEMENT MATH ═══
-• Against back wall: y = 0
-• Against left wall: x = 0
-• Against right wall: x = ${roomWidth} - itemWidth
-• Adjacent items: gap of 5-10cm minimum. Item B right of A: x_B = x_A + width_A + 5
-• For zone splits: leave ~40cm gap at midline (x=${halfW})
-
-═══ BEHAVIORAL RULES ═══
-1. NEVER place items without checking coordinates will fit. Calculate before calling tools.
-2. If place_item or move_item fails, read the error, calculate a corrected position, and retry ONCE.
-3. Be conversational and brief. Explain what you did in 1-2 sentences after completing actions.
-4. If the user uploads a reference image, visually interpret it and recreate a similar layout.
-5. When moving existing items, ALWAYS call list_items first to get the correct item ID.
-6. Round all coordinates to whole numbers.
-7. For complex layouts (5+ items), place them one-by-one, validating each.
-8. If a user request is ambiguous, make a reasonable choice and explain it — don't ask for clarification on obvious things.
-9. NEVER respond with just text when the user asked you to DO something. Always execute the tools.
-10. Keep your text responses under 3 sentences unless the user asks for details.`;
+═══ RULES ═══
+1. Calculate positions before placing. Item anchor = top-left corner.
+2. Keep 5-10cm gaps between items.
+3. If placement fails, correct and retry once.
+4. Brief responses (1-3 sentences) after actions.
+5. ALWAYS execute tools when asked to DO something.
+6. "slightly/a bit" = 15-30cm. "a lot" = 80-120cm.
+7. Against back wall: y=0. Against left wall: x=0. Against right wall: x=roomWidth-itemWidth.`;
 }
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
@@ -444,7 +778,7 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { messages: userMessages, roomState, canvasScreenshot, images: userImages } = body;
+    const { messages: userMessages, mode, roomState, floorPlan, roomName, canvasScreenshot, images: userImages } = body;
 
     if (!userMessages || !Array.isArray(userMessages) || userMessages.length === 0) {
       return new Response(JSON.stringify({ error: "No messages provided." }), {
@@ -456,13 +790,19 @@ serve(async (req) => {
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
 
-    let currentRoomState: RoomState = roomState;
+    const isFloorPlanMode = mode === "floorplan";
+    let currentRoomState: RoomState = roomState || { roomWidth: 600, roomDepth: 500, items: [] };
+    let currentFloorPlan: FloorPlan = floorPlan || { id: generateId(), name: "My Home", totalWidth: 0, totalHeight: 0, rooms: [], doors: [], windows: [] };
     const actionLog: string[] = [];
     const newItemIds: string[] = [];
 
-    const systemPrompt = buildSystemPrompt(currentRoomState);
+    const systemPrompt = isFloorPlanMode
+      ? buildFloorPlanSystemPrompt(currentFloorPlan)
+      : buildRoomSystemPrompt(currentRoomState, roomName || "Room");
 
-    // Build messages array
+    const tools = isFloorPlanMode ? floorPlanTools : furnitureTools;
+
+    // Build messages
     const aiMessages: Array<Record<string, unknown>> = [
       { role: "system", content: systemPrompt },
     ];
@@ -479,7 +819,7 @@ serve(async (req) => {
       }
     }
 
-    // Tool-call loop (max 20 iterations for complex layouts)
+    // Tool-call loop
     let finalContent = "";
     const MAX_ITERATIONS = 20;
 
@@ -500,18 +840,8 @@ serve(async (req) => {
 
       if (!response.ok) {
         const status = response.status;
-        if (status === 429) {
-          return new Response(JSON.stringify({ error: "Rate limit reached. Please wait a moment and try again." }), {
-            status: 429,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-        if (status === 402) {
-          return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits to continue." }), {
-            status: 402,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
+        if (status === 429) return new Response(JSON.stringify({ error: "Rate limit reached. Please wait." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        if (status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
         const errText = await response.text();
         console.error("AI gateway error:", status, errText);
         throw new Error(`AI gateway returned ${status}`);
@@ -524,54 +854,57 @@ serve(async (req) => {
       const msg = choice.message;
       aiMessages.push(msg);
 
-      // Process tool calls
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         for (const tc of msg.tool_calls) {
           let args: Record<string, unknown>;
           try {
             args = typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments;
-          } catch (parseErr) {
-            console.error("Failed to parse tool args:", tc.function.arguments);
-            aiMessages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({ error: "Invalid arguments JSON" }) });
+          } catch {
+            aiMessages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({ error: "Invalid arguments" }) });
             continue;
           }
 
-          const { result, roomState: newState, action } = processToolCall(tc.function.name, args, currentRoomState);
-          currentRoomState = newState;
-          if (action) actionLog.push(action);
-
-          // Track new item IDs
-          try {
-            const parsed = JSON.parse(result);
-            if (parsed.item_id) newItemIds.push(parsed.item_id);
-          } catch { /* ok */ }
-
-          aiMessages.push({ role: "tool", tool_call_id: tc.id, content: result });
+          if (isFloorPlanMode) {
+            const { result, floorPlan: newPlan, action } = processFloorPlanTool(tc.function.name, args, currentFloorPlan);
+            currentFloorPlan = newPlan;
+            if (action) actionLog.push(action);
+            aiMessages.push({ role: "tool", tool_call_id: tc.id, content: result });
+          } else {
+            const { result, roomState: newState, action } = processFurnitureTool(tc.function.name, args, currentRoomState);
+            currentRoomState = newState;
+            if (action) actionLog.push(action);
+            try { const p = JSON.parse(result); if (p.item_id) newItemIds.push(p.item_id); } catch {}
+            aiMessages.push({ role: "tool", tool_call_id: tc.id, content: result });
+          }
         }
         continue;
       }
 
-      // No tool calls — final text response
       finalContent = msg.content || "";
       break;
     }
 
-    // If we exhausted iterations without a final response, note it
     if (!finalContent && actionLog.length > 0) {
-      finalContent = `Done! I made ${actionLog.length} changes to the room layout.`;
+      finalContent = `Done! I made ${actionLog.length} changes.`;
     } else if (!finalContent) {
-      finalContent = "I processed your request. Take a look at the updated room!";
+      finalContent = "I processed your request. Take a look!";
     }
 
-    return new Response(
-      JSON.stringify({
-        message: finalContent,
-        roomState: currentRoomState,
-        actionLog,
-        newItemIds,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    const responseBody: Record<string, unknown> = {
+      message: finalContent,
+      actionLog,
+      newItemIds,
+    };
+
+    if (isFloorPlanMode) {
+      responseBody.floorPlan = currentFloorPlan;
+    } else {
+      responseBody.roomState = currentRoomState;
+    }
+
+    return new Response(JSON.stringify(responseBody), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   } catch (e) {
     console.error("room-architect error:", e);
     return new Response(
