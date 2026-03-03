@@ -848,7 +848,7 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { messages: userMessages, mode, roomState, floorPlan, roomName, canvasScreenshot, images: userImages } = body;
+    const { messages: userMessages, mode, roomState, floorPlan, roomName, canvasScreenshot, images: userImages, hasReferenceSketch } = body;
 
     if (!userMessages || !Array.isArray(userMessages) || userMessages.length === 0) {
       return new Response(JSON.stringify({ error: "No messages provided." }), {
