@@ -887,7 +887,14 @@ serve(async (req) => {
         const allImages: string[] = [];
         if (canvasScreenshot) allImages.push(canvasScreenshot);
         if (userImages && userImages.length > 0) allImages.push(...userImages);
-        aiMessages.push({ role: "user", content: buildUserContent(msg.content, allImages) });
+        
+        // If this is a refinement with a reference sketch, prepend context
+        let messageText = msg.content;
+        if (hasReferenceSketch && allImages.length > 1) {
+          messageText = `[REFERENCE: The second image is the ORIGINAL SKETCH that this floor plan is based on. Compare your current layout against it and fix any discrepancies the user mentions.]\n\n${messageText}`;
+        }
+        
+        aiMessages.push({ role: "user", content: buildUserContent(messageText, allImages) });
       } else {
         aiMessages.push({ role: msg.role, content: msg.content });
       }
