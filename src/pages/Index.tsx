@@ -33,6 +33,7 @@ const Index = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [highlightIds, setHighlightIds] = useState<string[]>([]);
   const [actions, setActions] = useState<ActionEntry[]>([]);
+  const [referenceImages, setReferenceImages] = useState<string[]>([]);
   const roomCanvasRef = useRef<RoomCanvasHandle>(null);
   const floorPlanCanvasRef = useRef<FloorPlanCanvasHandle>(null);
 
