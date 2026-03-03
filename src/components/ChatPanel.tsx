@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Send, Loader2 } from "lucide-react";
+import { Send, Loader2, RotateCcw } from "lucide-react";
 import type { ChatMessage } from "@/types/room";
 import ReactMarkdown from "react-markdown";
 
@@ -10,9 +10,10 @@ interface ChatPanelProps {
   messages: ChatMessage[];
   isLoading: boolean;
   onSend: (message: string) => void;
+  onReset: () => void;
 }
 
-export default function ChatPanel({ messages, isLoading, onSend }: ChatPanelProps) {
+export default function ChatPanel({ messages, isLoading, onSend, onReset }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -32,9 +33,14 @@ export default function ChatPanel({ messages, isLoading, onSend }: ChatPanelProp
   return (
     <div className="w-[380px] border-r border-border flex flex-col bg-card h-full">
       {/* Header */}
-      <div className="p-4 border-b border-border">
-        <h2 className="text-lg font-bold text-foreground">🏗️ AI Architect</h2>
-        <p className="text-xs text-muted-foreground">Describe what you want — I'll design the room.</p>
+      <div className="p-4 border-b border-border flex items-start justify-between">
+        <div>
+          <h2 className="text-lg font-bold text-foreground">🏗️ AI Architect</h2>
+          <p className="text-xs text-muted-foreground">Describe what you want — I'll design the room.</p>
+        </div>
+        <Button variant="ghost" size="icon" onClick={onReset} title="Reset room & chat">
+          <RotateCcw className="w-4 h-4" />
+        </Button>
       </div>
 
       {/* Messages */}

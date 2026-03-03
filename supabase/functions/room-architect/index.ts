@@ -177,6 +177,7 @@ function processToolCall(
     }
 
     case "place_item": {
+      console.log(`[place_item] type=${args.item_type} x=${args.x} y=${args.y} rot=${args.rotation}`);
       // Enforce validation — reject if placement would clip or overlap
       const validation = validatePlacement(
         roomState,
@@ -186,6 +187,7 @@ function processToolCall(
         args.rotation as number
       );
       if (!validation.valid) {
+        console.log(`[place_item] REJECTED: ${validation.reason}`);
         return {
           result: JSON.stringify({ success: false, reason: validation.reason }),
           roomState,
@@ -200,6 +202,7 @@ function processToolCall(
         rotation: args.rotation as number,
       };
       const updated = { ...roomState, items: [...roomState.items, newItem] };
+      console.log(`[place_item] SUCCESS: id=${id}, bounds=(${args.x},${args.y})→(${(args.x as number) + (ASSET_CATALOG[newItem.type]?.width || 0)}, ${(args.y as number) + (ASSET_CATALOG[newItem.type]?.height || 0)})`);
       return {
         result: JSON.stringify({ success: true, item_id: id, label: ASSET_CATALOG[newItem.type]?.label }),
         roomState: updated,
