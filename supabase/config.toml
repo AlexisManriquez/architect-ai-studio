@@ -1,1 +1,4 @@
 project_id = "lmbhpzzkgvmrdpfnzwmw"
+
+[functions.room-architect]
+verify_jwt = false
