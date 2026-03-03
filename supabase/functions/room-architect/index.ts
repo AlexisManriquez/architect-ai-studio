@@ -177,6 +177,20 @@ function processToolCall(
     }
 
     case "place_item": {
+      // Enforce validation — reject if placement would clip or overlap
+      const validation = validatePlacement(
+        roomState,
+        args.item_type as string,
+        args.x as number,
+        args.y as number,
+        args.rotation as number
+      );
+      if (!validation.valid) {
+        return {
+          result: JSON.stringify({ success: false, reason: validation.reason }),
+          roomState,
+        };
+      }
       const id = generateId();
       const newItem: PlacedItem = {
         id,
