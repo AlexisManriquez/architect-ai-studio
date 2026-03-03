@@ -848,7 +848,7 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { messages: userMessages, mode, roomState, floorPlan, roomName, canvasScreenshot, images: userImages } = body;
+    const { messages: userMessages, mode, roomState, floorPlan, roomName, canvasScreenshot, images: userImages, hasReferenceSketch } = body;
 
     if (!userMessages || !Array.isArray(userMessages) || userMessages.length === 0) {
       return new Response(JSON.stringify({ error: "No messages provided." }), {
@@ -887,7 +887,14 @@ serve(async (req) => {
         const allImages: string[] = [];
         if (canvasScreenshot) allImages.push(canvasScreenshot);
         if (userImages && userImages.length > 0) allImages.push(...userImages);
-        aiMessages.push({ role: "user", content: buildUserContent(msg.content, allImages) });
+        
+        // If this is a refinement with a reference sketch, prepend context
+        let messageText = msg.content;
+        if (hasReferenceSketch && allImages.length > 1) {
+          messageText = `[REFERENCE: The second image is the ORIGINAL SKETCH that this floor plan is based on. Compare your current layout against it and fix any discrepancies the user mentions.]\n\n${messageText}`;
+        }
+        
+        aiMessages.push({ role: "user", content: buildUserContent(messageText, allImages) });
       } else {
         aiMessages.push({ role: msg.role, content: msg.content });
       }

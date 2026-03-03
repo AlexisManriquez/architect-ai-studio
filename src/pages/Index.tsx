@@ -33,6 +33,7 @@ const Index = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [highlightIds, setHighlightIds] = useState<string[]>([]);
   const [actions, setActions] = useState<ActionEntry[]>([]);
+  const [referenceImages, setReferenceImages] = useState<string[]>([]);
   const roomCanvasRef = useRef<RoomCanvasHandle>(null);
   const floorPlanCanvasRef = useRef<FloorPlanCanvasHandle>(null);
 
@@ -50,6 +51,7 @@ const Index = () => {
       setMessages([]);
       setHighlightIds([]);
       setActions([]);
+      setReferenceImages([]);
       setActiveRoom(null);
       setMode("floorplan");
       toast.success("Floor plan reset — fresh start!");
@@ -89,6 +91,11 @@ const Index = () => {
   }, []);
 
   const handleSend = useCallback(async (text: string, userImages?: string[]) => {
+    // Track reference images (first upload in floorplan mode becomes persistent reference)
+    if (userImages && userImages.length > 0 && mode === "floorplan") {
+      setReferenceImages(userImages);
+    }
+
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
@@ -111,11 +118,15 @@ const Index = () => {
         console.warn("Could not capture screenshot:", err);
       }
 
+      // Always include reference images (original sketch) on follow-up floorplan requests
+      const imagesToSend = userImages || (mode === "floorplan" && referenceImages.length > 0 ? referenceImages : undefined);
+
       const requestBody: Record<string, unknown> = {
         messages: updatedMessages.map(m => ({ role: m.role, content: m.content })),
         mode,
         canvasScreenshot,
-        images: userImages,
+        images: imagesToSend,
+        hasReferenceSketch: mode === "floorplan" && referenceImages.length > 0 && !userImages,
       };
 
       if (mode === "floorplan") {
