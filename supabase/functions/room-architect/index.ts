@@ -42,7 +42,6 @@ const ASSET_CATALOG: Record<string, { label: string; width: number; height: numb
   "wardrobe": { label: "Wardrobe", width: 120, height: 60 },
 };
 
-// ─── Room types ─────────────────────────────────────────────────────────────
 const ROOM_TYPES = [
   "living-room", "bedroom", "bathroom", "kitchen", "dining-room",
   "office", "garage", "hallway", "closet", "laundry", "entry",
@@ -107,30 +106,52 @@ function generateId() {
   return crypto.randomUUID().slice(0, 8);
 }
 
-// ─── Floor Plan Tools ───────────────────────────────────────────────────────
+// ─── Floor Plan Validation ──────────────────────────────────────────────────
+function validateFloorPlanRooms(rooms: FloorPlanRoom[]): string[] {
+  const warnings: string[] = [];
+  for (let i = 0; i < rooms.length; i++) {
+    for (let j = i + 1; j < rooms.length; j++) {
+      const a = rooms[i], b = rooms[j];
+      // Check overlap (allow shared edges but not interior overlap)
+      const overlapX = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+      const overlapY = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+      if (overlapX > 1 && overlapY > 1) {
+        warnings.push(`OVERLAP: "${a.name}" and "${b.name}" overlap by ${overlapX}×${overlapY}cm. Fix positions so rooms share edges but don't overlap.`);
+      }
+    }
+  }
+  return warnings;
+}
 
+// ─── Floor Plan Tools ───────────────────────────────────────────────────────
 const floorPlanTools = [
   {
     type: "function",
     function: {
       name: "generate_floor_plan",
-      description: "Generate a complete floor plan from a description. Creates rooms, doors, and windows. Use for prompts like '3 bedroom 2 bath house' or 'open concept studio'. Returns the full floor plan.",
+      description: `Generate a complete floor plan. CRITICAL RULES for room placement:
+1. Rooms MUST share exact wall edges — no gaps between adjacent rooms.
+2. Rooms MUST NOT overlap (except sharing a wall edge at exactly the same coordinate).
+3. For L-shaped or non-rectangular homes, only place rooms where they belong — don't force a rectangular bounding box.
+4. Use a hallway (120-150cm wide) to connect bedrooms and bathrooms.
+5. Place rooms in a grid-like arrangement. Adjacent rooms share edges precisely.
+6. Total dimensions should reflect realistic house sizes (e.g., a 1500sqft house ≈ 14m × 10m).`,
       parameters: {
         type: "object",
         properties: {
           name: { type: "string", description: "Name for the floor plan" },
           rooms: {
             type: "array",
-            description: "Array of rooms to create. Position them so they tile together without gaps/overlaps. All coordinates in cm.",
+            description: "Array of rooms. Rooms MUST tile together with shared edges. Use precise coordinates so adjacent rooms share exact wall positions.",
             items: {
               type: "object",
               properties: {
                 name: { type: "string" },
                 type: { type: "string", enum: [...ROOM_TYPES] },
-                x: { type: "number", description: "X position in cm" },
-                y: { type: "number", description: "Y position in cm" },
-                width: { type: "number", description: "Width in cm" },
-                height: { type: "number", description: "Height in cm" },
+                x: { type: "number", description: "X position in cm from left edge" },
+                y: { type: "number", description: "Y position in cm from top edge" },
+                width: { type: "number", description: "Width in cm (horizontal extent)" },
+                height: { type: "number", description: "Height in cm (vertical extent)" },
               },
               required: ["name", "type", "x", "y", "width", "height"],
               additionalProperties: false,
@@ -138,14 +159,14 @@ const floorPlanTools = [
           },
           doors: {
             type: "array",
-            description: "Doors between rooms or to exterior. Place on shared walls between adjacent rooms.",
+            description: "Doors between rooms. Position on shared wall edges. Horizontal door = on a horizontal shared edge. Vertical door = on a vertical shared edge.",
             items: {
               type: "object",
               properties: {
                 roomId1_index: { type: "number", description: "Index of first room in rooms array" },
                 roomId2_index: { type: "number", description: "Index of second room (-1 for exterior)" },
-                x: { type: "number", description: "X position of door" },
-                y: { type: "number", description: "Y position of door" },
+                x: { type: "number", description: "X position of door center on wall" },
+                y: { type: "number", description: "Y position of door center on wall" },
                 width: { type: "number", description: "Door width in cm (typically 90)" },
                 orientation: { type: "string", enum: ["horizontal", "vertical"] },
               },
@@ -155,7 +176,7 @@ const floorPlanTools = [
           },
           windows: {
             type: "array",
-            description: "Windows on exterior walls.",
+            description: "Windows on exterior walls only.",
             items: {
               type: "object",
               properties: {
@@ -180,7 +201,7 @@ const floorPlanTools = [
     type: "function",
     function: {
       name: "add_room",
-      description: "Add a single room to the existing floor plan.",
+      description: "Add a single room to the existing floor plan. Ensure it shares edges with existing rooms.",
       parameters: {
         type: "object",
         properties: {
@@ -200,15 +221,15 @@ const floorPlanTools = [
     type: "function",
     function: {
       name: "resize_room",
-      description: "Resize an existing room by ID. Adjusts width and/or height.",
+      description: "Resize an existing room by ID.",
       parameters: {
         type: "object",
         properties: {
           room_id: { type: "string" },
-          width: { type: "number", description: "New width in cm (optional)" },
-          height: { type: "number", description: "New height in cm (optional)" },
-          x: { type: "number", description: "New x position (optional, for repositioning after resize)" },
-          y: { type: "number", description: "New y position (optional)" },
+          width: { type: "number" },
+          height: { type: "number" },
+          x: { type: "number" },
+          y: { type: "number" },
         },
         required: ["room_id"],
         additionalProperties: false,
@@ -239,9 +260,7 @@ const floorPlanTools = [
       description: "Remove a room from the floor plan by ID.",
       parameters: {
         type: "object",
-        properties: {
-          room_id: { type: "string" },
-        },
+        properties: { room_id: { type: "string" } },
         required: ["room_id"],
         additionalProperties: false,
       },
@@ -297,8 +316,7 @@ const floorPlanTools = [
   },
 ];
 
-// ─── Furniture Tools (existing) ─────────────────────────────────────────────
-
+// ─── Furniture Tools ────────────────────────────────────────────────────────
 const furnitureTools = [
   {
     type: "function",
@@ -431,7 +449,7 @@ function processFloorPlanTool(
 ): { result: string; floorPlan: FloorPlan; action?: string } {
   switch (name) {
     case "generate_floor_plan": {
-      const rooms: FloorPlanRoom[] = (args.rooms as any[]).map((r, i) => ({
+      const rooms: FloorPlanRoom[] = (args.rooms as any[]).map((r) => ({
         id: generateId(),
         name: r.name,
         type: r.type,
@@ -440,6 +458,9 @@ function processFloorPlanTool(
         width: Math.round(r.width),
         height: Math.round(r.height),
       }));
+
+      // Validate no overlaps
+      const warnings = validateFloorPlanRooms(rooms);
 
       const totalWidth = Math.max(...rooms.map(r => r.x + r.width));
       const totalHeight = Math.max(...rooms.map(r => r.y + r.height));
@@ -475,8 +496,18 @@ function processFloorPlanTool(
       };
 
       const totalSqft = rooms.reduce((s, r) => s + Math.round((r.width * r.height) / 929), 0);
+      let resultStr = JSON.stringify({
+        success: true,
+        rooms: rooms.length,
+        doors: doors.length,
+        windows: windows.length,
+        totalSqft,
+        room_ids: rooms.map(r => ({ id: r.id, name: r.name })),
+        warnings: warnings.length > 0 ? warnings : undefined,
+      });
+
       return {
-        result: JSON.stringify({ success: true, rooms: rooms.length, doors: doors.length, windows: windows.length, totalSqft }),
+        result: resultStr,
         floorPlan: newPlan,
         action: `Generated "${newPlan.name}" — ${rooms.length} rooms, ~${totalSqft} sqft`,
       };
@@ -493,13 +524,19 @@ function processFloorPlanTool(
         width: Math.round(args.width as number),
         height: Math.round(args.height as number),
       };
+      const updatedRooms = [...floorPlan.rooms, room];
+      const warnings = validateFloorPlanRooms(updatedRooms);
       const updated = {
         ...floorPlan,
-        rooms: [...floorPlan.rooms, room],
+        rooms: updatedRooms,
         totalWidth: Math.max(floorPlan.totalWidth, room.x + room.width),
         totalHeight: Math.max(floorPlan.totalHeight, room.y + room.height),
       };
-      return { result: JSON.stringify({ success: true, room_id: id }), floorPlan: updated, action: `Added ${room.name}` };
+      return {
+        result: JSON.stringify({ success: true, room_id: id, warnings: warnings.length > 0 ? warnings : undefined }),
+        floorPlan: updated,
+        action: `Added ${room.name}`,
+      };
     }
 
     case "resize_room": {
@@ -516,7 +553,6 @@ function processFloorPlanTool(
           y: args.y != null ? Math.round(args.y as number) : r.y,
         } : r),
       };
-      // Recalculate bounds
       updated.totalWidth = Math.max(...updated.rooms.map(r => r.x + r.width));
       updated.totalHeight = Math.max(...updated.rooms.map(r => r.y + r.height));
       return { result: JSON.stringify({ success: true }), floorPlan: updated, action: `Resized ${room.name}` };
@@ -667,7 +703,7 @@ function buildUserContent(text: string, images: string[] = []) {
   if (images.length === 0) return text;
   const parts: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
   for (const img of images) {
-    parts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${img}` } });
+    parts.push({ type: "image_url", image_url: { url: img.startsWith("data:") ? img : `data:image/png;base64,${img}` } });
   }
   parts.push({ type: "text", text });
   return parts;
@@ -682,10 +718,10 @@ function buildFloorPlanSystemPrompt(floorPlan: FloorPlan): string {
         `  • ${r.name} [id: ${r.id}] type=${r.type} at (${r.x},${r.y}) ${r.width}×${r.height}cm (~${Math.round((r.width * r.height) / 929)} sqft)`
       ).join("\n");
 
-  return `You are a professional floor plan architect AI with VISION capabilities. You design house/apartment floor plans by placing rooms, doors, and windows.
+  return `You are an expert residential floor plan architect AI with VISION capabilities. You design precise, realistic house floor plans.
 
 YOU HAVE TWO INFORMATION SOURCES:
-1. A SCREENSHOT IMAGE of the current floor plan (visual — look at it!)
+1. A SCREENSHOT IMAGE of the current canvas (visual — examine it carefully!)
 2. PRECISE COORDINATE DATA below (numerical — use for exact positions)
 
 ═══ FLOOR PLAN: "${floorPlan.name}" ═══
@@ -697,43 +733,77 @@ Windows: ${floorPlan.windows.length}
 ═══ COORDINATE SYSTEM ═══
 Origin (0,0) = top-left corner. X → right, Y → down. All values in cm.
 Room positions are their top-left corner.
-100cm = 1 meter. 1 sqft ≈ 929 cm².
+100cm = 1 meter ≈ 3.28 feet. 1 sqft ≈ 929 cm². 1 ft ≈ 30.48cm.
 
-═══ ROOM TYPES AVAILABLE ═══
+═══ ROOM TYPES ═══
 ${ROOM_TYPES.join(", ")}
 
-═══ DESIGN GUIDELINES ═══
-• Rooms should tile together with shared walls (no gaps between adjacent rooms).
-• Standard room sizes (approximate):
-  - Bedroom: 300×350cm (~113 sqft) to 450×500cm (~242 sqft)
-  - Master bedroom: 400×450cm (~194 sqft) to 500×550cm (~296 sqft)
-  - Bathroom: 200×250cm (~54 sqft) to 300×350cm (~113 sqft)
-  - Kitchen: 300×350cm (~113 sqft) to 400×450cm (~194 sqft)
-  - Living room: 400×450cm (~194 sqft) to 600×500cm (~323 sqft)
-  - Hallway: 120×300cm+ (long and narrow)
-  - Closet: 120×150cm (~19 sqft) to 200×250cm (~54 sqft)
-• Place doors on shared walls between adjacent rooms.
-  - Horizontal doors: placed on horizontal shared edges (same y, different x)
-  - Vertical doors: placed on vertical shared edges (same x, different y)
-• Place windows on exterior walls only.
-• For multi-bedroom plans, use a hallway to connect bedrooms.
-• The entry/front door should face south (bottom of plan).
+═══ CRITICAL PLACEMENT RULES ═══
+
+**RULE 1: SHARED WALLS — NO GAPS**
+Adjacent rooms MUST share exact wall edges. If Room A ends at x=500 and Room B is next to it, Room B starts at x=500.
+Example: Garage at (0,0) 500×600, Laundry at (500,0) 200×300 — they share the wall at x=500.
+
+**RULE 2: NO OVERLAPPING ROOMS**
+Rooms must never overlap. The x/y/width/height define exclusive rectangular areas.
+
+**RULE 3: REALISTIC PROPORTIONS**
+Use these as MINIMUM sizes (convert sqft → cm² by ×929):
+  - Master Bedroom: 400-500cm × 400-500cm (170-270 sqft)
+  - Bedroom: 300-400cm × 350-400cm (110-170 sqft)  
+  - Bathroom: 200-300cm × 200-300cm (40-100 sqft)
+  - Kitchen: 300-400cm × 300-400cm (100-170 sqft)
+  - Living Room: 500-700cm × 400-500cm (215-375 sqft)
+  - Garage: 500-700cm × 550-650cm (300-490 sqft)
+  - Hallway: 120-150cm wide × length as needed
+  - Closet: 150-200cm × 150-250cm (25-55 sqft)
+  - Laundry: 200-250cm × 200-300cm (45-80 sqft)
+  - Pantry: 150-200cm × 150-200cm (25-45 sqft)
+  - Entry: 150-250cm × 150-250cm (25-70 sqft)
+
+**RULE 4: L-SHAPED AND NON-RECTANGULAR LAYOUTS**
+Not every house is a rectangle. For L-shaped homes, T-shaped homes, etc:
+- Only place rooms where they actually go — leave empty space in the bounding box.
+- The bounding box is just the max extent, NOT a filled rectangle.
+- Look at the uploaded sketch carefully to determine the overall shape.
+
+**RULE 5: SKETCH INTERPRETATION**
+When the user uploads a floor plan image/sketch:
+1. CAREFULLY study every room label, dimension annotation, and spatial relationship.
+2. Count all rooms and identify their types from labels.
+3. Measure RELATIVE proportions between rooms (e.g., "the garage is roughly 2× the width of the bedroom").
+4. Preserve the EXACT spatial layout: which rooms are adjacent, which rooms are on which side.
+5. If dimensions are labeled (e.g., "14'" or "20'"), convert them: feet × 30.48 = cm.
+6. Reproduce the exact room arrangement — same rows, same adjacency relationships.
+7. Pay attention to hallways connecting rooms, and include them.
+8. If you see sqft labels, use them to calculate room sizes.
+
+**RULE 6: HALLWAYS**
+Use hallways (120-150cm wide) to connect bedrooms and bathrooms. Hallways run between rooms and connect interior doors.
 
 ═══ TOOLS ═══
-1. **generate_floor_plan** — Create an entire floor plan at once. Best for initial generation.
+1. **generate_floor_plan** — Create an entire floor plan. Best for initial generation or full recreation from a sketch.
 2. **add_room** / **remove_room** / **resize_room** / **move_room** — Modify individual rooms.
-3. **add_door** / **add_window** — Add connections and openings.
+3. **add_door** / **add_window** — Add doors (on shared walls) and windows (on exterior walls).
 4. **list_rooms** — Inspect current layout.
 
-═══ RULES ═══
-1. When generating a floor plan, tile rooms edge-to-edge with no gaps.
-2. Doors must be placed at shared wall boundaries between rooms.
-3. All coordinates must be whole numbers.
-4. Be conversational and brief (1-3 sentences after executing actions).
-5. ALWAYS execute tools when the user asks you to DO something.
-6. For sketch/image uploads, interpret the layout visually and recreate it.
-7. If the user mentions square footage, convert: sqft × 929 = cm².
-8. Keep hallways 120-150cm wide minimum.`;
+═══ DOOR PLACEMENT ═══
+- Doors go on SHARED WALLS between adjacent rooms.
+- If two rooms share a horizontal edge (same Y coord), use orientation="horizontal".
+- If two rooms share a vertical edge (same X coord), use orientation="vertical".
+- Place the door at the midpoint of the shared wall, offset from the corner.
+- Exterior doors: use roomId2_index = -1.
+
+═══ WINDOW PLACEMENT ═══
+- Windows only on EXTERIOR walls (walls not shared with another room).
+- wall="north" = top edge, wall="south" = bottom edge, wall="east" = right edge, wall="west" = left edge.
+
+═══ RESPONSE RULES ═══
+1. ALWAYS execute tools when the user asks you to DO something.
+2. Be conversational and brief (1-3 sentences after executing actions).
+3. When recreating a sketch, describe what you see first, then generate the plan.
+4. All coordinates must be whole numbers.
+5. If the floor plan has issues (gaps, overlaps), fix them proactively.`;
 }
 
 function buildRoomSystemPrompt(roomState: RoomState, roomName: string): string {
@@ -760,7 +830,7 @@ WEST/LEFT = low x | EAST/RIGHT = high x | NORTH/BACK = low y | SOUTH/FRONT = hig
 Center ≈ (${halfW}, ${halfD})
 
 ═══ AVAILABLE FURNITURE ═══
-${Object.entries(ASSET_CATALOG).map(([k, v]) => `• ${k}: "${v.label}" ${v.width}×${v.height}cm`).join("\n")}
+${Object.entries(ASSET_CATALOG).filter(([,v]) => !v.isWallElement).map(([k, v]) => `• ${k}: "${v.label}" ${v.width}×${v.height}cm`).join("\n")}
 
 ═══ RULES ═══
 1. Calculate positions before placing. Item anchor = top-left corner.
@@ -802,6 +872,10 @@ serve(async (req) => {
 
     const tools = isFloorPlanMode ? floorPlanTools : furnitureTools;
 
+    // Determine if user uploaded images (use pro model for vision)
+    const hasUserImages = userImages && userImages.length > 0;
+    const model = (isFloorPlanMode && hasUserImages) ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash";
+
     // Build messages
     const aiMessages: Array<Record<string, unknown>> = [
       { role: "system", content: systemPrompt },
@@ -831,7 +905,7 @@ serve(async (req) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
+          model,
           messages: aiMessages,
           tools,
           tool_choice: "auto",
@@ -885,7 +959,7 @@ serve(async (req) => {
     }
 
     if (!finalContent && actionLog.length > 0) {
-      finalContent = `Done! I made ${actionLog.length} changes.`;
+      finalContent = `Done! I made ${actionLog.length} changes to the floor plan.`;
     } else if (!finalContent) {
       finalContent = "I processed your request. Take a look!";
     }
