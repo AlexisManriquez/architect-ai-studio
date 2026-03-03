@@ -218,6 +218,18 @@ function processToolCall(
       const moveId = args.item_id as string;
       const item = roomState.items.find((i) => i.id === moveId);
       if (!item) return { result: JSON.stringify({ success: false, reason: "Item not found" }), roomState };
+      // Enforce validation on moves too
+      const moveValidation = validatePlacement(
+        roomState,
+        item.type,
+        args.x as number,
+        args.y as number,
+        args.rotation as number,
+        moveId
+      );
+      if (!moveValidation.valid) {
+        return { result: JSON.stringify({ success: false, reason: moveValidation.reason }), roomState };
+      }
       const movedItem = { ...item, x: args.x as number, y: args.y as number, rotation: args.rotation as number };
       const updated = { ...roomState, items: roomState.items.map((i) => (i.id === moveId ? movedItem : i)) };
       return { result: JSON.stringify({ success: true }), roomState: updated };
