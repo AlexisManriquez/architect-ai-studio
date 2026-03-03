@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Send, Loader2 } from "lucide-react";
+import { Send, Loader2, RotateCcw } from "lucide-react";
 import type { ChatMessage } from "@/types/room";
 import ReactMarkdown from "react-markdown";
 
@@ -10,9 +10,10 @@ interface ChatPanelProps {
   messages: ChatMessage[];
   isLoading: boolean;
   onSend: (message: string) => void;
+  onReset: () => void;
 }
 
-export default function ChatPanel({ messages, isLoading, onSend }: ChatPanelProps) {
+export default function ChatPanel({ messages, isLoading, onSend, onReset }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
