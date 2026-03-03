@@ -872,9 +872,9 @@ serve(async (req) => {
 
     const tools = isFloorPlanMode ? floorPlanTools : furnitureTools;
 
-    // Determine if user uploaded images (use pro model for vision)
+    // Use pro model for floorplan mode (more reliable tool calling) and for vision tasks
     const hasUserImages = userImages && userImages.length > 0;
-    const model = (isFloorPlanMode && hasUserImages) ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash";
+    const model = isFloorPlanMode ? "google/gemini-2.5-pro" : (hasUserImages ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash");
 
     // Build messages
     const aiMessages: Array<Record<string, unknown>> = [
