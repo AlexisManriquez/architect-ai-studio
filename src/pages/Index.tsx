@@ -11,6 +11,12 @@ const Index = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
+  const handleReset = useCallback(() => {
+    setRoomState(createDefaultRoom());
+    setMessages([]);
+    toast.success("Room reset — fresh start!");
+  }, []);
+
   const handleSend = useCallback(async (text: string) => {
     const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: text };
     const updatedMessages = [...messages, userMsg];
@@ -48,7 +54,7 @@ const Index = () => {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background">
-      <ChatPanel messages={messages} isLoading={isLoading} onSend={handleSend} />
+      <ChatPanel messages={messages} isLoading={isLoading} onSend={handleSend} onReset={handleReset} />
       <RoomCanvas roomState={roomState} />
     </div>
   );
