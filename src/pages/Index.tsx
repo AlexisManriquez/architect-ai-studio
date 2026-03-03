@@ -51,6 +51,7 @@ const Index = () => {
       setMessages([]);
       setHighlightIds([]);
       setActions([]);
+      setReferenceImages([]);
       setActiveRoom(null);
       setMode("floorplan");
       toast.success("Floor plan reset — fresh start!");
