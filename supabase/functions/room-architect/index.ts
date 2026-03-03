@@ -267,20 +267,24 @@ serve(async (req) => {
 ROOM DIMENSIONS: ${currentRoomState.roomWidth}cm wide × ${currentRoomState.roomDepth}cm deep.
 WALLS: 3 walls — back (top, y=0), left (x=0), right (x=${currentRoomState.roomWidth}). The bottom side (y=${currentRoomState.roomDepth}) is open.
 COORDINATE SYSTEM: (0,0) is top-left (back-left corner). X increases rightward, Y increases downward.
+ITEM POSITIONING: x,y is the TOP-LEFT corner of the item's bounding box. An item at (x, y) with width W and height H occupies the rectangle from (x, y) to (x+W, y+H). When rotation=90, width and height swap.
 
 ${itemsSummary}
 
 AVAILABLE ITEMS: ${Object.entries(ASSET_CATALOG).map(([k, v]) => `${k} (${v.width}×${v.height}cm)`).join(", ")}
 
-RULES:
-1. ALWAYS call validate_placement BEFORE place_item or move_item to check for collisions.
-2. If validation fails, find an alternative position and try again.
-3. For compound requests like "L-shaped sofa area", use multiple items (e.g., two sofas at right angles).
-4. Place items against walls by setting the appropriate coordinate to 0 (back wall: y=0, left wall: x=0, right wall: x=roomWidth-itemWidth).
-5. For rotated items: rotation 0 = default orientation, 90 = rotated clockwise.
-6. When listing items, use their IDs for reference.
-7. Keep reasonable spacing between furniture (at least 5-10cm gaps).
-8. Be conversational and explain what you're doing.`;
+CRITICAL RULES:
+1. Items MUST NOT overlap. place_item and move_item will REJECT overlapping placements automatically.
+2. Always validate_placement first to check, then place_item. If rejected, calculate a non-overlapping position and retry.
+3. POSITIONING MATH: To place items adjacent without overlap, calculate exact coordinates:
+   - Item A at (x1, y1) with width W1: Item B to the right starts at x = x1 + W1 (add a small gap of 5cm).
+   - Item A at (x1, y1) with height H1: Item B below starts at y = y1 + H1 (add a small gap of 5cm).
+4. L-SHAPED LAYOUTS: For an L-shape in a corner, place one sofa along the back wall (y=0, rotation=0) and the second sofa along the left wall (x=0, rotation=90). Make sure they don't overlap — the rotated sofa's bounding box uses swapped dimensions.
+   Example: sofa-3-seater (220×85cm) at (0, 0) rotation=0 occupies (0,0)→(220,85). sofa-2-seater (160×85cm) at (0, 85+5=90) rotation=90 occupies (0,90)→(85,250). These do NOT overlap.
+5. Place items against walls: back wall y=0, left wall x=0, right wall x=roomWidth-itemWidth.
+6. Keep at least 5cm gaps between furniture.
+7. Be conversational and explain what you're doing.
+8. When listing items, use their IDs for reference.`;
 
     let aiMessages: Array<Record<string, unknown>> = [
       { role: "system", content: systemPrompt },
