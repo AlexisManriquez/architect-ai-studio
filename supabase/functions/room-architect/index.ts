@@ -6,6 +6,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+// ─── Asset Catalog ──────────────────────────────────────────────────────────
 const ASSET_CATALOG: Record<string, { label: string; width: number; height: number; isWallElement?: boolean }> = {
   "sofa-2-seater": { label: "2-Seater Sofa", width: 160, height: 85 },
   "sofa-3-seater": { label: "3-Seater Sofa", width: 220, height: 85 },
@@ -23,21 +24,17 @@ const ASSET_CATALOG: Record<string, { label: string; width: number; height: numb
   "doorway": { label: "Doorway", width: 90, height: 15, isWallElement: true },
 };
 
+// ─── Tool Definitions ───────────────────────────────────────────────────────
 const tools = [
   {
     type: "function",
     function: {
       name: "place_item",
-      description:
-        "Place a furniture item in the room. Use validate_placement first. x is distance from left wall in cm, y is distance from back wall in cm. rotation is 0, 90, 180, or 270.",
+      description: "Place a furniture item in the room. x is distance from left wall in cm, y is distance from back wall in cm. rotation is 0, 90, 180, or 270.",
       parameters: {
         type: "object",
         properties: {
-          item_type: {
-            type: "string",
-            enum: Object.keys(ASSET_CATALOG),
-            description: "The type of item to place",
-          },
+          item_type: { type: "string", enum: Object.keys(ASSET_CATALOG) },
           x: { type: "number", description: "X position in cm from left wall interior" },
           y: { type: "number", description: "Y position in cm from back wall interior" },
           rotation: { type: "number", description: "Rotation in degrees (0, 90, 180, 270)" },
@@ -84,8 +81,7 @@ const tools = [
     type: "function",
     function: {
       name: "validate_placement",
-      description:
-        "Check if placing an item at a position is valid. Returns whether the placement would clip walls or overlap other items. Always call this before place_item or move_item.",
+      description: "Check if placing an item at a position is valid. Returns whether the placement would clip walls or overlap other items. Always call this before place_item or move_item.",
       parameters: {
         type: "object",
         properties: {
@@ -102,6 +98,7 @@ const tools = [
   },
 ];
 
+// ─── Types ──────────────────────────────────────────────────────────────────
 interface PlacedItem {
   id: string;
   type: string;
@@ -116,6 +113,7 @@ interface RoomState {
   items: PlacedItem[];
 }
 
+// ─── Validation Logic ───────────────────────────────────────────────────────
 function getItemBounds(type: string, x: number, y: number, rotation: number) {
   const def = ASSET_CATALOG[type];
   if (!def) return null;
@@ -136,12 +134,10 @@ function validatePlacement(
   const bounds = getItemBounds(itemType, x, y, rotation);
   if (!bounds) return { valid: false, reason: "Unknown item type" };
 
-  // Check room bounds
   if (bounds.x < 0 || bounds.y < 0 || bounds.x2 > roomState.roomWidth || bounds.y2 > roomState.roomDepth) {
     return { valid: false, reason: `Item extends outside room bounds. Room is ${roomState.roomWidth}cm × ${roomState.roomDepth}cm. Item would span from (${bounds.x},${bounds.y}) to (${bounds.x2},${bounds.y2}).` };
   }
 
-  // Check overlaps
   for (const item of roomState.items) {
     if (excludeId && item.id === excludeId) continue;
     const other = getItemBounds(item.type, item.x, item.y, item.rotation);
@@ -158,54 +154,31 @@ function generateId() {
   return crypto.randomUUID().slice(0, 8);
 }
 
+// ─── Tool Call Processor ────────────────────────────────────────────────────
 function processToolCall(
   name: string,
   args: Record<string, unknown>,
   roomState: RoomState
-): { result: string; roomState: RoomState } {
+): { result: string; roomState: RoomState; action?: string } {
   switch (name) {
     case "validate_placement": {
-      const r = validatePlacement(
-        roomState,
-        args.item_type as string,
-        args.x as number,
-        args.y as number,
-        args.rotation as number,
-        args.exclude_item_id as string | undefined
-      );
+      const r = validatePlacement(roomState, args.item_type as string, args.x as number, args.y as number, args.rotation as number, args.exclude_item_id as string | undefined);
       return { result: JSON.stringify(r), roomState };
     }
 
     case "place_item": {
-      console.log(`[place_item] type=${args.item_type} x=${args.x} y=${args.y} rot=${args.rotation}`);
-      // Enforce validation — reject if placement would clip or overlap
-      const validation = validatePlacement(
-        roomState,
-        args.item_type as string,
-        args.x as number,
-        args.y as number,
-        args.rotation as number
-      );
+      const validation = validatePlacement(roomState, args.item_type as string, args.x as number, args.y as number, args.rotation as number);
       if (!validation.valid) {
-        console.log(`[place_item] REJECTED: ${validation.reason}`);
-        return {
-          result: JSON.stringify({ success: false, reason: validation.reason }),
-          roomState,
-        };
+        return { result: JSON.stringify({ success: false, reason: validation.reason }), roomState };
       }
       const id = generateId();
-      const newItem: PlacedItem = {
-        id,
-        type: args.item_type as string,
-        x: args.x as number,
-        y: args.y as number,
-        rotation: args.rotation as number,
-      };
+      const newItem: PlacedItem = { id, type: args.item_type as string, x: args.x as number, y: args.y as number, rotation: args.rotation as number };
       const updated = { ...roomState, items: [...roomState.items, newItem] };
-      console.log(`[place_item] SUCCESS: id=${id}, bounds=(${args.x},${args.y})→(${(args.x as number) + (ASSET_CATALOG[newItem.type]?.width || 0)}, ${(args.y as number) + (ASSET_CATALOG[newItem.type]?.height || 0)})`);
+      const label = ASSET_CATALOG[newItem.type]?.label || newItem.type;
       return {
-        result: JSON.stringify({ success: true, item_id: id, label: ASSET_CATALOG[newItem.type]?.label }),
+        result: JSON.stringify({ success: true, item_id: id, label }),
         roomState: updated,
+        action: `Placed ${label} at (${newItem.x}, ${newItem.y})`,
       };
     }
 
@@ -213,29 +186,23 @@ function processToolCall(
       const itemId = args.item_id as string;
       const exists = roomState.items.find((i) => i.id === itemId);
       if (!exists) return { result: JSON.stringify({ success: false, reason: "Item not found" }), roomState };
+      const label = ASSET_CATALOG[exists.type]?.label || exists.type;
       const updated = { ...roomState, items: roomState.items.filter((i) => i.id !== itemId) };
-      return { result: JSON.stringify({ success: true }), roomState: updated };
+      return { result: JSON.stringify({ success: true }), roomState: updated, action: `Removed ${label}` };
     }
 
     case "move_item": {
       const moveId = args.item_id as string;
       const item = roomState.items.find((i) => i.id === moveId);
       if (!item) return { result: JSON.stringify({ success: false, reason: "Item not found" }), roomState };
-      // Enforce validation on moves too
-      const moveValidation = validatePlacement(
-        roomState,
-        item.type,
-        args.x as number,
-        args.y as number,
-        args.rotation as number,
-        moveId
-      );
+      const moveValidation = validatePlacement(roomState, item.type, args.x as number, args.y as number, args.rotation as number, moveId);
       if (!moveValidation.valid) {
         return { result: JSON.stringify({ success: false, reason: moveValidation.reason }), roomState };
       }
       const movedItem = { ...item, x: args.x as number, y: args.y as number, rotation: args.rotation as number };
       const updated = { ...roomState, items: roomState.items.map((i) => (i.id === moveId ? movedItem : i)) };
-      return { result: JSON.stringify({ success: true }), roomState: updated };
+      const label = ASSET_CATALOG[item.type]?.label || item.type;
+      return { result: JSON.stringify({ success: true }), roomState: updated, action: `Moved ${label} to (${args.x}, ${args.y})` };
     }
 
     default:
@@ -243,15 +210,37 @@ function processToolCall(
   }
 }
 
+// ─── Build Multimodal Messages ──────────────────────────────────────────────
+function buildUserContent(text: string, images: string[] = []) {
+  if (images.length === 0) return text;
+
+  const parts: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+
+  // Add images first
+  for (const img of images) {
+    parts.push({
+      type: "image_url",
+      image_url: { url: `data:image/png;base64,${img}` },
+    });
+  }
+
+  // Then text
+  parts.push({ type: "text", text });
+
+  return parts;
+}
+
+// ─── Main Handler ───────────────────────────────────────────────────────────
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { messages: userMessages, roomState } = await req.json();
+    const { messages: userMessages, roomState, canvasScreenshot, images: userImages } = await req.json();
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
 
     let currentRoomState: RoomState = roomState;
+    const actionLog: string[] = [];
 
     // Build current items summary
     const itemsSummary =
@@ -259,18 +248,21 @@ serve(async (req) => {
         ? "The room is currently empty."
         : "Current items:\n" +
           currentRoomState.items
-            .map(
-              (i: PlacedItem) =>
-                `- ${ASSET_CATALOG[i.type]?.label || i.type} (id: ${i.id}) at (${i.x}, ${i.y}), rotation: ${i.rotation}°`
-            )
+            .map((i: PlacedItem) => `- ${ASSET_CATALOG[i.type]?.label || i.type} (id: ${i.id}) at (${i.x}, ${i.y}), rotation: ${i.rotation}°`)
             .join("\n");
 
-    const systemPrompt = `You are an AI room architect. You design room layouts by placing furniture and wall elements in a 2D floor plan.
+    const systemPrompt = `You are an AI room architect with VISION. You can SEE the room layout in the attached screenshot image. You design room layouts by placing furniture and wall elements in a 2D floor plan.
+
+You have TWO sources of spatial information:
+1. The SCREENSHOT IMAGE of the current room canvas (visual)
+2. The COORDINATE DATA below (precise numbers)
+
+Use BOTH to reason about placements. Look at the image to understand spatial relationships, then use coordinates for precision.
 
 ROOM DIMENSIONS: ${currentRoomState.roomWidth}cm wide × ${currentRoomState.roomDepth}cm deep.
 WALLS: 3 walls — back (top, y=0), left (x=0), right (x=${currentRoomState.roomWidth}). The bottom side (y=${currentRoomState.roomDepth}) is open.
 COORDINATE SYSTEM: (0,0) is top-left (back-left corner). X increases rightward, Y increases downward.
-ITEM POSITIONING: x,y is the TOP-LEFT corner of the item's bounding box. An item at (x, y) with width W and height H occupies the rectangle from (x, y) to (x+W, y+H). When rotation=90, width and height swap.
+ITEM POSITIONING: x,y is the TOP-LEFT corner of the item's bounding box. When rotation=90, width and height swap.
 
 ${itemsSummary}
 
@@ -280,22 +272,42 @@ CRITICAL RULES:
 1. Items MUST NOT overlap. place_item and move_item will REJECT overlapping placements automatically.
 2. Always validate_placement first to check, then place_item. If rejected, calculate a non-overlapping position and retry.
 3. POSITIONING MATH: To place items adjacent without overlap, calculate exact coordinates:
-   - Item A at (x1, y1) with width W1: Item B to the right starts at x = x1 + W1 (add a small gap of 5cm).
-   - Item A at (x1, y1) with height H1: Item B below starts at y = y1 + H1 (add a small gap of 5cm).
-4. L-SHAPED LAYOUTS: For an L-shape in a corner, place one sofa along the back wall (y=0, rotation=0) and the second sofa along the left wall (x=0, rotation=90). Make sure they don't overlap — the rotated sofa's bounding box uses swapped dimensions.
-   Example: sofa-3-seater (220×85cm) at (0, 0) rotation=0 occupies (0,0)→(220,85). sofa-2-seater (160×85cm) at (0, 85+5=90) rotation=90 occupies (0,90)→(85,250). These do NOT overlap.
+   - Item A at (x1, y1) with width W1: Item B to the right starts at x = x1 + W1 + 5 (5cm gap).
+   - Item A at (x1, y1) with height H1: Item B below starts at y = y1 + H1 + 5 (5cm gap).
+4. L-SHAPED LAYOUTS: Place one sofa along back wall (y=0, rotation=0), second along left wall (x=0, rotation=90). Make sure they don't overlap.
 5. Place items against walls: back wall y=0, left wall x=0, right wall x=roomWidth-itemWidth.
 6. Keep at least 5cm gaps between furniture.
 7. Be conversational and explain what you're doing.
-8. When listing items, use their IDs for reference.`;
+8. If the user uploads a reference image, visually interpret it and try to recreate a similar layout.
+9. LOOK at the screenshot to verify your understanding of the current layout before making changes.`;
 
-    let aiMessages: Array<Record<string, unknown>> = [
+    // Build messages array for the AI
+    const aiMessages: Array<Record<string, unknown>> = [
       { role: "system", content: systemPrompt },
-      ...userMessages,
     ];
+
+    // Process user messages, making the last one multimodal if we have images
+    for (let i = 0; i < userMessages.length; i++) {
+      const msg = userMessages[i];
+      if (i === userMessages.length - 1 && msg.role === "user") {
+        // Last user message: attach canvas screenshot + any uploaded images
+        const allImages: string[] = [];
+        if (canvasScreenshot) allImages.push(canvasScreenshot);
+        if (userImages && userImages.length > 0) allImages.push(...userImages);
+
+        aiMessages.push({
+          role: "user",
+          content: buildUserContent(msg.content, allImages),
+        });
+      } else {
+        aiMessages.push({ role: msg.role, content: msg.content });
+      }
+    }
 
     // Tool-call loop (max 10 iterations)
     let finalContent = "";
+    const newItemIds: string[] = [];
+
     for (let i = 0; i < 10; i++) {
       const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
         method: "POST",
@@ -304,7 +316,7 @@ CRITICAL RULES:
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "google/gemini-3-flash-preview",
+          model: "google/gemini-2.5-flash",
           messages: aiMessages,
           tools,
           tool_choice: "auto",
@@ -315,14 +327,12 @@ CRITICAL RULES:
         const status = response.status;
         if (status === 429) {
           return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again shortly." }), {
-            status: 429,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
+            status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
         if (status === 402) {
           return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits." }), {
-            status: 402,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
+            status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
         const errText = await response.text();
@@ -337,22 +347,24 @@ CRITICAL RULES:
       const msg = choice.message;
       aiMessages.push(msg);
 
-      // If the AI wants to call tools
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         for (const tc of msg.tool_calls) {
           const args = typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments;
-          const { result, roomState: newState } = processToolCall(tc.function.name, args, currentRoomState);
+          const { result, roomState: newState, action } = processToolCall(tc.function.name, args, currentRoomState);
           currentRoomState = newState;
-          aiMessages.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            content: result,
-          });
+          if (action) actionLog.push(action);
+
+          // Track new item IDs for highlighting
+          try {
+            const parsed = JSON.parse(result);
+            if (parsed.item_id) newItemIds.push(parsed.item_id);
+          } catch {}
+
+          aiMessages.push({ role: "tool", tool_call_id: tc.id, content: result });
         }
-        continue; // Let AI process tool results
+        continue;
       }
 
-      // No more tool calls — we have the final response
       finalContent = msg.content || "";
       break;
     }
@@ -361,6 +373,8 @@ CRITICAL RULES:
       JSON.stringify({
         message: finalContent,
         roomState: currentRoomState,
+        actionLog,
+        newItemIds,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
