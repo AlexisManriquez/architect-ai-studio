@@ -65,14 +65,19 @@ export default function RoomCanvas({ roomState }: RoomCanvasProps) {
     };
     const fill = colorMap[def.color] || "hsl(var(--muted))";
 
+    // Swap dimensions for rotated items to match the validation logic
+    const isRotated = item.rotation === 90 || item.rotation === 270;
+    const w = isRotated ? def.height : def.width;
+    const h = isRotated ? def.width : def.height;
+
     return (
       <g
         key={item.id}
-        transform={`translate(${item.x}, ${item.y}) rotate(${item.rotation}, ${def.width / 2}, ${def.height / 2})`}
+        transform={`translate(${item.x}, ${item.y})`}
       >
         <rect
-          width={def.width}
-          height={def.height}
+          width={w}
+          height={h}
           fill={fill}
           stroke="hsl(var(--foreground))"
           strokeWidth={1.5}
@@ -80,12 +85,12 @@ export default function RoomCanvas({ roomState }: RoomCanvasProps) {
           opacity={0.85}
         />
         <text
-          x={def.width / 2}
-          y={def.height / 2}
+          x={w / 2}
+          y={h / 2}
           textAnchor="middle"
           dominantBaseline="central"
           fill="hsl(var(--foreground))"
-          fontSize={Math.min(14, def.width / 6)}
+          fontSize={Math.min(14, w / 6)}
           fontWeight={600}
           style={{ userSelect: "none" }}
         >
