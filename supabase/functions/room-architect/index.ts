@@ -251,6 +251,9 @@ serve(async (req) => {
             .map((i: PlacedItem) => `- ${ASSET_CATALOG[i.type]?.label || i.type} (id: ${i.id}) at (${i.x}, ${i.y}), rotation: ${i.rotation}°`)
             .join("\n");
 
+    const halfW = Math.round(currentRoomState.roomWidth / 2);
+    const halfD = Math.round(currentRoomState.roomDepth / 2);
+
     const systemPrompt = `You are an AI room architect with VISION. You can SEE the room layout in the attached screenshot image. You design room layouts by placing furniture and wall elements in a 2D floor plan.
 
 You have TWO sources of spatial information:
@@ -263,6 +266,23 @@ ROOM DIMENSIONS: ${currentRoomState.roomWidth}cm wide × ${currentRoomState.room
 WALLS: 3 walls — back (top, y=0), left (x=0), right (x=${currentRoomState.roomWidth}). The bottom side (y=${currentRoomState.roomDepth}) is open.
 COORDINATE SYSTEM: (0,0) is top-left (back-left corner). X increases rightward, Y increases downward.
 ITEM POSITIONING: x,y is the TOP-LEFT corner of the item's bounding box. When rotation=90, width and height swap.
+
+DIRECTIONAL MAPPING (CRITICAL — always use this):
+- WEST / LEFT side of room = x from 0 to ${halfW} (the left half)
+- EAST / RIGHT side of room = x from ${halfW} to ${currentRoomState.roomWidth} (the right half)
+- NORTH / BACK / TOP of room = y from 0 to ${halfD} (closer to back wall)
+- SOUTH / FRONT / BOTTOM of room = y from ${halfD} to ${currentRoomState.roomDepth} (closer to open side)
+- CENTER of room = around (${halfW}, ${halfD})
+
+When a user says "west side" they mean the LEFT half (low x values). "East side" means the RIGHT half (high x values).
+
+ZONE LAYOUT STRATEGY:
+When asked to split the room into zones (e.g., "living on west, kitchen on east"):
+1. Mentally divide the room at x=${halfW} (the midline).
+2. Place ALL items for one zone in x range [0, ${halfW - 20}].
+3. Place ALL items for the other zone in x range [${halfW + 20}, ${currentRoomState.roomWidth}].
+4. Leave a ~40cm gap at the midline as a visual separator between zones.
+5. Within each zone, arrange items logically (seating facing each other, kitchen items along walls, etc.).
 
 ${itemsSummary}
 
@@ -279,7 +299,8 @@ CRITICAL RULES:
 6. Keep at least 5cm gaps between furniture.
 7. Be conversational and explain what you're doing.
 8. If the user uploads a reference image, visually interpret it and try to recreate a similar layout.
-9. LOOK at the screenshot to verify your understanding of the current layout before making changes.`;
+9. LOOK at the screenshot to verify your understanding of the current layout before making changes.
+10. When placing multiple items, carefully calculate positions to avoid ALL overlaps. Double-check each coordinate.`;
 
     // Build messages array for the AI
     const aiMessages: Array<Record<string, unknown>> = [
