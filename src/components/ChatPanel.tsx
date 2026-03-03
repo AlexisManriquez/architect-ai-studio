@@ -1,21 +1,23 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Send, Loader2, RotateCcw } from "lucide-react";
+import { Send, Loader2, RotateCcw, ImagePlus, X } from "lucide-react";
 import type { ChatMessage } from "@/types/room";
 import ReactMarkdown from "react-markdown";
+import { fileToBase64 } from "@/lib/canvasCapture";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
   isLoading: boolean;
-  onSend: (message: string) => void;
+  onSend: (message: string, images?: string[]) => void;
   onReset: () => void;
 }
 
 export default function ChatPanel({ messages, isLoading, onSend, onReset }: ChatPanelProps) {
   const [input, setInput] = useState("");
+  const [pendingImages, setPendingImages] = useState<{ base64: string; preview: string }[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -25,9 +27,28 @@ export default function ChatPanel({ messages, isLoading, onSend, onReset }: Chat
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
-    onSend(input.trim());
+    if ((!input.trim() && pendingImages.length === 0) || isLoading) return;
+    const images = pendingImages.map((p) => p.base64);
+    onSend(input.trim() || "Here's an image — what do you see?", images.length > 0 ? images : undefined);
     setInput("");
+    setPendingImages([]);
+  };
+
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files.slice(0, 3)) {
+      const base64 = await fileToBase64(file);
+      const preview = URL.createObjectURL(file);
+      setPendingImages((prev) => [...prev, { base64, preview }]);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeImage = (index: number) => {
+    setPendingImages((prev) => {
+      URL.revokeObjectURL(prev[index].preview);
+      return prev.filter((_, i) => i !== index);
+    });
   };
 
   return (
@@ -35,8 +56,8 @@ export default function ChatPanel({ messages, isLoading, onSend, onReset }: Chat
       {/* Header */}
       <div className="p-4 border-b border-border flex items-start justify-between">
         <div>
-          <h2 className="text-lg font-bold text-foreground">🏗️ AI Architect</h2>
-          <p className="text-xs text-muted-foreground">Describe what you want — I'll design the room.</p>
+          <h2 className="text-lg font-bold text-foreground">👁️ Vision Architect</h2>
+          <p className="text-xs text-muted-foreground">I see the room. Describe or show me what you want.</p>
         </div>
         <Button variant="ghost" size="icon" onClick={onReset} title="Reset room & chat">
           <RotateCcw className="w-4 h-4" />
@@ -47,11 +68,14 @@ export default function ChatPanel({ messages, isLoading, onSend, onReset }: Chat
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 && (
           <div className="text-sm text-muted-foreground space-y-2 mt-8">
-            <p className="font-medium text-foreground">Try saying:</p>
+            <p className="font-medium text-foreground">🎯 I can see the room canvas!</p>
+            <p className="text-xs">I take a screenshot before each action to visually understand the layout.</p>
+            <p className="font-medium text-foreground mt-4">Try saying:</p>
             <p className="bg-muted rounded px-3 py-2">"Add a 3-seater sofa against the back wall"</p>
             <p className="bg-muted rounded px-3 py-2">"Make an L-shaped seating area in the corner"</p>
             <p className="bg-muted rounded px-3 py-2">"Put a kitchen island in the center"</p>
-            <p className="bg-muted rounded px-3 py-2">"Add a window to the left wall"</p>
+            <p className="font-medium text-foreground mt-4">Or upload a photo:</p>
+            <p className="bg-muted rounded px-3 py-2">📷 "Make my room look like this" + image</p>
           </div>
         )}
 
@@ -67,6 +91,19 @@ export default function ChatPanel({ messages, isLoading, onSend, onReset }: Chat
                   : "bg-muted text-foreground"
               }`}
             >
+              {/* Show uploaded images */}
+              {msg.images && msg.images.length > 0 && (
+                <div className="flex gap-1 mb-2 flex-wrap">
+                  {msg.images.map((img, i) => (
+                    <img
+                      key={i}
+                      src={`data:image/png;base64,${img}`}
+                      alt="Uploaded"
+                      className="w-16 h-16 object-cover rounded border border-border/50"
+                    />
+                  ))}
+                </div>
+              )}
               {msg.role === "assistant" ? (
                 <div className="prose prose-sm dark:prose-invert max-w-none [&_p]:m-0">
                   <ReactMarkdown>{msg.content}</ReactMarkdown>
@@ -82,14 +119,49 @@ export default function ChatPanel({ messages, isLoading, onSend, onReset }: Chat
           <div className="flex justify-start">
             <div className="bg-muted rounded-lg px-3 py-2 flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin" />
-              Designing...
+              👁️ Looking at the room & designing...
             </div>
           </div>
         )}
       </div>
 
+      {/* Pending image previews */}
+      {pendingImages.length > 0 && (
+        <div className="px-3 pb-1 flex gap-2 flex-wrap">
+          {pendingImages.map((img, i) => (
+            <div key={i} className="relative group">
+              <img src={img.preview} alt="Upload" className="w-14 h-14 object-cover rounded border border-border" />
+              <button
+                onClick={() => removeImage(i)}
+                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Input */}
       <form onSubmit={handleSubmit} className="p-3 border-t border-border flex gap-2">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={handleImageSelect}
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isLoading}
+          title="Upload reference image"
+        >
+          <ImagePlus className="w-4 h-4" />
+        </Button>
         <Input
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -97,7 +169,7 @@ export default function ChatPanel({ messages, isLoading, onSend, onReset }: Chat
           disabled={isLoading}
           className="flex-1"
         />
-        <Button type="submit" size="icon" disabled={isLoading || !input.trim()}>
+        <Button type="submit" size="icon" disabled={isLoading || (!input.trim() && pendingImages.length === 0)}>
           <Send className="w-4 h-4" />
         </Button>
       </form>
