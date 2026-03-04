@@ -1171,6 +1171,9 @@ serve(async (req) => {
               })));
             }
 
+            // Force tool use on first call when no actions taken yet
+            const currentToolChoice = (i === 0 && actionLog.length === 0) ? "required" : "auto";
+
             const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
               method: "POST",
               headers: {
@@ -1181,7 +1184,7 @@ serve(async (req) => {
                 model,
                 messages: aiMessages,
                 tools,
-                tool_choice: "auto",
+                tool_choice: currentToolChoice,
               }),
             });
 
@@ -1204,9 +1207,13 @@ serve(async (req) => {
 
             const data = await response.json();
             const choice = data.choices?.[0];
-            if (!choice) throw new Error("Empty response from AI");
+            if (!choice) {
+              console.error("Empty AI response, full data:", JSON.stringify(data).slice(0, 500));
+              throw new Error("Empty response from AI");
+            }
 
             const msg = choice.message;
+            console.log(`Iteration ${i}: finish_reason=${choice.finish_reason}, has_tool_calls=${!!(msg.tool_calls?.length)}, content_length=${msg.content?.length || 0}`);
             aiMessages.push(msg);
 
             if (msg.tool_calls && msg.tool_calls.length > 0) {
