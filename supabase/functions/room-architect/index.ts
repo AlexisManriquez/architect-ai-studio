@@ -228,17 +228,51 @@ function inspectFloorPlan(floorPlan: FloorPlan): { issues: string[]; suggestions
     }
   }
 
-  // 6. Check garage connectivity
+  // 6. Check garage connectivity AND perimeter placement
   const garages = rooms.filter(r => r.type === "garage");
   for (const garage of garages) {
     const neighbors = [...(adjacency[garage.id] || [])].filter(n => n !== "exterior");
     if (neighbors.length === 0) {
-      // Check if there's a hallway or room nearby that SHOULD connect
       const nearbyRooms = rooms.filter(r => r.id !== garage.id && sharesWall(garage, r));
       if (nearbyRooms.length > 0) {
         issues.push(`DISCONNECTED GARAGE: "${garage.name}" shares a wall with ${nearbyRooms.map(r => r.name).join(", ")} but has no door connecting them. Add a door to connect the garage to the house.`);
       } else {
         issues.push(`DETACHED GARAGE: "${garage.name}" doesn't share any wall with the house. Move it adjacent to the house or add a connecting hallway.`);
+      }
+    }
+
+    // NEW: Check perimeter placement — garage must touch exterior bounding box
+    const touchesEdge =
+      garage.x <= minX + 2 ||
+      garage.y <= minY + 2 ||
+      (garage.x + garage.width) >= totalWidth - 2 ||
+      (garage.y + garage.height) >= totalHeight - 2;
+
+    if (!touchesEdge) {
+      issues.push(`INTERIOR GARAGE: "${garage.name}" is surrounded by other rooms. A garage MUST be on the outer perimeter of the house so vehicles can enter. Move it to the edge of the floor plan.`);
+    }
+  }
+
+  // 6b. Check bathroom accessibility
+  const bathrooms = rooms.filter(r => r.type === "bathroom");
+  for (const bath of bathrooms) {
+    const neighbors = adjacency[bath.id] || new Set();
+    const nonExteriorNeighbors = [...neighbors].filter(n => n !== "exterior");
+
+    if (nonExteriorNeighbors.length > 0) {
+      const connectedRooms = nonExteriorNeighbors.map(nId => rooms.find(r => r.id === nId)!).filter(Boolean);
+      const connectedToCommon = connectedRooms.some(r => COMMON_ROOM_TYPES.has(r.type));
+      const connectedToBedrooms = connectedRooms.filter(r => r.type === "bedroom");
+
+      // If connected to multiple bedrooms and NO hallway/common area — awkward layout
+      if (!connectedToCommon && connectedToBedrooms.length > 1) {
+        issues.push(`AWKWARD BATHROOM: "${bath.name}" is only accessible by walking through multiple bedrooms (${connectedToBedrooms.map(b => b.name).join(", ")}). Ensure at least one door connects to a hallway, or restrict it to a single bedroom en-suite.`);
+      }
+
+      // Trapped behind utility room
+      const trappedInUtility = connectedRooms.every(r => r.type === "laundry" || r.type === "closet");
+      if (trappedInUtility) {
+        issues.push(`TRAPPED BATHROOM: "${bath.name}" is only accessible through a closet or laundry room. It must connect to a hallway, bedroom, or living area.`);
       }
     }
   }
