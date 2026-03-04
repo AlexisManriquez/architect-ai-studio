@@ -673,6 +673,10 @@ function processFloorPlanTool(
       };
 
       const totalSqft = rooms.reduce((s, r) => s + Math.round((r.width * r.height) / 929), 0);
+      
+      // Auto-run inspection on the generated plan
+      const inspection = inspectFloorPlan(newPlan);
+      
       let resultStr = JSON.stringify({
         success: true,
         rooms: rooms.length,
@@ -681,6 +685,14 @@ function processFloorPlanTool(
         totalSqft,
         room_ids: rooms.map(r => ({ id: r.id, name: r.name })),
         warnings: warnings.length > 0 ? warnings : undefined,
+        inspection: {
+          passed: inspection.issues.length === 0,
+          issues: inspection.issues,
+          suggestions: inspection.suggestions,
+          note: inspection.issues.length > 0
+            ? "CRITICAL: The floor plan has issues. You MUST fix them NOW by adding doors, moving rooms, etc. Then call validate_floor_plan to confirm."
+            : "Floor plan passed all checks!",
+        },
       });
 
       return {
