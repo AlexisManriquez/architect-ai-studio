@@ -1199,30 +1199,19 @@ Use these as MINIMUM sizes (convert sqft → cm² by ×929):
   - Pantry: 150-200cm × 150-200cm (25-45 sqft)
   - Entry: 150-250cm × 150-250cm (25-70 sqft)
 
-**RULE 4: CREATIVE, NON-RECTANGULAR LAYOUTS (VERY IMPORTANT)**
-Real houses are NEVER perfect rectangles. You MUST design layouts with architectural character:
-  - Create L-shaped, T-shaped, or U-shaped overall footprints by leaving gaps in the bounding box (not every corner needs a room).
-  - Bump-outs: extend some rooms (e.g., master bedroom, living room, garage) beyond the main wall line by 100-200cm to create visual interest.
-  - Staggered walls: not all rooms on the same row need identical depths. Vary room heights so the exterior silhouette is irregular.
-  - Bay/nook extensions: a kitchen or dining room might extend outward from the main body.
-  - Setbacks: the garage or a wing of bedrooms can be set back from the front facade.
-  - Vary room dimensions — avoid making rooms the same width/height. Real homes have variety.
-  
-  EXAMPLES of non-rectangular techniques:
-  - Garage protrudes 150cm forward from the main facade
-  - Master suite extends 200cm beyond the back wall of the rest of the house
-  - Living room has a bump-out bay window alcove
-  - Bedroom wing is offset from the main body, connected by a short hallway
-  - Entry foyer recesses 100cm inward, creating a covered porch effect
-  
-  DO NOT just stack rooms in a perfect grid. Think like a real architect designing a home with curb appeal.
+**RULE 4: ADAPTIVE LAYOUT COMPLEXITY**
+- Adapt the shape of the house to the user's request. 
+- IF the user asks for a simple studio, 1-bedroom apartment, or basic cabin, a perfect rectangle or square is completely fine and expected.
+- IF the user asks for a larger home (2+ bedrooms), you MUST design layouts with architectural character: Create L-shaped, T-shaped, or U-shaped footprints. Add bump-outs (e.g., extend the living room or garage beyond the main wall line by 100-200cm). Vary room dimensions so the exterior silhouette is irregular.
 
 **RULE 4B: NO DEAD SPACE (CRITICAL)**
-Every square meter INSIDE the house footprint must be assigned to a room. If you place a small room (butler's pantry, closet) that doesn't span the full width/height between its neighbors, you create unbuildable dead space — walls with nothing behind them. 
-  - When placing a room between two others, make sure it fills the entire gap OR adjacent rooms extend to fill remaining space.
-  - A butler's pantry between kitchen and dining should span the full depth between the hallway and the exterior wall, not leave empty gaps on either side.
-  - If a room is narrower than the space available, expand it or add a closet/utility room to fill the gap.
-  - Think about what a BUILDER would see: every wall must have a room on both sides (or be an exterior wall).
+Every square meter INSIDE the house footprint must be assigned to a room. When placing a room between two others, make sure it fills the entire gap OR adjacent rooms extend to fill remaining space. Think about what a BUILDER would see: every interior wall must have a room on both sides.
+
+**RULE 4C: STRICT GARAGE PLACEMENT**
+Garages MUST share an exterior wall with the absolute outside of the house footprint so cars can drive in. NEVER place a garage entirely surrounded by other rooms in the interior of the floor plan.
+
+**RULE 4D: STRICT BATHROOM PLACEMENT**
+Guest bathrooms MUST connect directly to a hallway or main living space. En-suite bathrooms MUST connect to exactly ONE bedroom. Never force a user to walk through multiple bedrooms or a utility closet to reach a primary bathroom.
 
 **RULE 5: ROOM ACCESSIBILITY — EVERY ROOM MUST BE REACHABLE (CRITICAL)**
 Think about how a person WALKS through the house. Every room must be accessible without passing through another private room:
