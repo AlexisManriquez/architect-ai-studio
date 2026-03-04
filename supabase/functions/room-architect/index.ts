@@ -1013,6 +1013,15 @@ Use hallways (120-150cm wide) as the SPINE to connect bedrooms and bathrooms to 
 2. **add_room** / **remove_room** / **resize_room** / **move_room** — Modify individual rooms.
 3. **add_door** / **add_window** — Add doors and windows.
 4. **list_rooms** — Inspect current layout.
+5. **validate_floor_plan** — 🔍 INSPECTOR TOOL. Run after generating or significantly modifying the floor plan.
+
+═══ MANDATORY VALIDATION WORKFLOW ═══
+After calling generate_floor_plan, you MUST:
+1. Call **validate_floor_plan** to inspect the result.
+2. If issues are found, FIX them (add missing doors, move rooms, restructure layout).
+3. Call **validate_floor_plan** AGAIN to confirm all issues are resolved.
+4. Repeat until validation passes with zero issues.
+This ensures every floor plan has proper room connectivity, no landlocked bedrooms, and logical flow.
 
 ═══ DOOR PLACEMENT ═══
 - Doors go on SHARED WALLS between adjacent rooms.
@@ -1028,7 +1037,8 @@ Use hallways (120-150cm wide) as the SPINE to connect bedrooms and bathrooms to 
 2. Be conversational and brief (1-3 sentences after executing actions).
 3. When recreating a sketch, describe what you see first, then generate the plan.
 4. All coordinates must be whole numbers.
-5. If the floor plan has issues (gaps, overlaps), fix them proactively.`;
+5. If the floor plan has issues (gaps, overlaps), fix them proactively.
+6. ALWAYS call validate_floor_plan after generate_floor_plan — no exceptions.`;
 }
 
 function buildRoomSystemPrompt(roomState: RoomState, roomName: string): string {
