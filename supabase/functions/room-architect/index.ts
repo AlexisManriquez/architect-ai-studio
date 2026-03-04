@@ -1491,18 +1491,12 @@ serve(async (req) => {
                     actionLog.push(action);
                     controller.enqueue(encoder.encode(sseEvent("action", { text: action })));
                   }
-                  // Track validation failures for graceful fallback
+                  // Circuit breaker: track consecutive validation failures
                   if (tc.function.name === "validate_floor_plan") {
                     try {
                       const parsed = JSON.parse(result);
-                      if (!parsed.passed) {
-                        const currentIssueCount = parsed.issues?.length || 0;
-                        if (currentIssueCount > 0 && currentIssueCount === lastIssueCount) {
-                          consecutiveFailures++;
-                        } else {
-                          consecutiveFailures = currentIssueCount > 0 ? 1 : 0;
-                        }
-                        lastIssueCount = currentIssueCount;
+                      if (parsed.passed === false) {
+                        consecutiveFailures++;
                       } else {
                         consecutiveFailures = 0;
                       }
