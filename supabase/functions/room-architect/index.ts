@@ -976,7 +976,7 @@ function processFloorPlanTool(
     }
 
     case "add_door": {
-      const door: FloorPlanDoor = {
+      let door: FloorPlanDoor = {
         id: generateId(),
         roomId1: args.room_id_1 as string,
         roomId2: args.room_id_2 as string,
@@ -985,6 +985,7 @@ function processFloorPlanTool(
         width: Math.round(args.width as number),
         orientation: args.orientation as "horizontal" | "vertical",
       };
+      door = snapDoorToWall(door, floorPlan.rooms);
       return {
         result: JSON.stringify({ success: true, door_id: door.id }),
         floorPlan: { ...floorPlan, doors: [...floorPlan.doors, door] },
@@ -993,7 +994,7 @@ function processFloorPlanTool(
     }
 
     case "add_window": {
-      const win: FloorPlanWindow = {
+      let win: FloorPlanWindow = {
         id: generateId(),
         roomId: args.room_id as string,
         x: Math.round(args.x as number),
@@ -1002,6 +1003,8 @@ function processFloorPlanTool(
         orientation: args.orientation as "horizontal" | "vertical",
         wall: args.wall as "north" | "south" | "east" | "west",
       };
+      const winRoom = floorPlan.rooms.find(r => r.id === win.roomId);
+      if (winRoom) win = snapWindowToWall(win, winRoom);
       return {
         result: JSON.stringify({ success: true, window_id: win.id }),
         floorPlan: { ...floorPlan, windows: [...floorPlan.windows, win] },
