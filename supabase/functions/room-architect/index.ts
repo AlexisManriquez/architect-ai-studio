@@ -1247,6 +1247,14 @@ Think about how a person WALKS through the house. Every room must be accessible 
   - Master bathroom and master closet should be accessible FROM the master bedroom only.
   - Entry/foyer should be near the front of the house, connecting to the main living area.
 
+**RULE 10: GARAGE PERIMETER (CRITICAL)**
+  - Garages MUST share an exterior wall with the absolute outside of the house footprint. Never place a garage entirely surrounded by other rooms. Cars must be able to drive in from outside.
+
+**RULE 11: BATHROOM ACCESSIBILITY (CRITICAL)**
+  - Guest bathrooms MUST connect to a hallway or common area (living room, entry). They should NOT be accessible only through an unrelated room.
+  - En-suite bathrooms MUST connect to exactly ONE bedroom. If a bathroom connects to multiple bedrooms without a hallway connection, that's an awkward layout.
+  - Bathrooms must NEVER be trapped behind closets, laundry rooms, or utility spaces.
+
 **RULE 8: SKETCH INTERPRETATION**
 When the user uploads a floor plan image/sketch:
 1. Study every room label, dimension annotation, and spatial relationship.
