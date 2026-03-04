@@ -131,10 +131,11 @@ const floorPlanTools = [
       description: `Generate a complete floor plan. CRITICAL RULES for room placement:
 1. Rooms MUST share exact wall edges — no gaps between adjacent rooms.
 2. Rooms MUST NOT overlap (except sharing a wall edge at exactly the same coordinate).
-3. For L-shaped or non-rectangular homes, only place rooms where they belong — don't force a rectangular bounding box.
+3. Design CREATIVE, NON-RECTANGULAR layouts. Real houses have L-shapes, T-shapes, bump-outs, and staggered walls. NEVER make a perfect rectangle or grid.
 4. Use a hallway (120-150cm wide) to connect bedrooms and bathrooms.
-5. Place rooms in a grid-like arrangement. Adjacent rooms share edges precisely.
-6. Total dimensions should reflect realistic house sizes (e.g., a 1500sqft house ≈ 14m × 10m).`,
+5. Vary room depths and widths — not all rooms in a row should have the same height.
+6. Total dimensions should reflect realistic house sizes (e.g., a 1500sqft house ≈ 14m × 10m).
+7. Extend some rooms (garage, master suite, living room) beyond the main wall line to create architectural interest.`,
       parameters: {
         type: "object",
         properties: {
@@ -758,8 +759,23 @@ Use these as MINIMUM sizes (convert sqft → cm² by ×929):
   - Pantry: 150-200cm × 150-200cm (25-45 sqft)
   - Entry: 150-250cm × 150-250cm (25-70 sqft)
 
-**RULE 4: L-SHAPED AND NON-RECTANGULAR LAYOUTS**
-Not every house is a rectangle. Only place rooms where they actually go.
+**RULE 4: CREATIVE, NON-RECTANGULAR LAYOUTS (VERY IMPORTANT)**
+Real houses are NEVER perfect rectangles. You MUST design layouts with architectural character:
+  - Create L-shaped, T-shaped, or U-shaped overall footprints by leaving gaps in the bounding box (not every corner needs a room).
+  - Bump-outs: extend some rooms (e.g., master bedroom, living room, garage) beyond the main wall line by 100-200cm to create visual interest.
+  - Staggered walls: not all rooms on the same row need identical depths. Vary room heights so the exterior silhouette is irregular.
+  - Bay/nook extensions: a kitchen or dining room might extend outward from the main body.
+  - Setbacks: the garage or a wing of bedrooms can be set back from the front facade.
+  - Vary room dimensions — avoid making rooms the same width/height. Real homes have variety.
+  
+  EXAMPLES of non-rectangular techniques:
+  - Garage protrudes 150cm forward from the main facade
+  - Master suite extends 200cm beyond the back wall of the rest of the house
+  - Living room has a bump-out bay window alcove
+  - Bedroom wing is offset from the main body, connected by a short hallway
+  - Entry foyer recesses 100cm inward, creating a covered porch effect
+  
+  DO NOT just stack rooms in a perfect grid. Think like a real architect designing a home with curb appeal.
 
 **RULE 5: SKETCH INTERPRETATION**
 When the user uploads a floor plan image/sketch:
