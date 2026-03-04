@@ -132,10 +132,12 @@ const floorPlanTools = [
 1. Rooms MUST share exact wall edges — no gaps between adjacent rooms.
 2. Rooms MUST NOT overlap (except sharing a wall edge at exactly the same coordinate).
 3. Design CREATIVE, NON-RECTANGULAR layouts. Real houses have L-shapes, T-shapes, bump-outs, and staggered walls. NEVER make a perfect rectangle or grid.
-4. Use a hallway (120-150cm wide) to connect bedrooms and bathrooms.
+4. Use a hallway (120-150cm wide) as the SPINE connecting bedrooms and bathrooms. EVERY bedroom must connect to a hallway or common area — NEVER require walking through one bedroom to reach another.
 5. Vary room depths and widths — not all rooms in a row should have the same height.
 6. Total dimensions should reflect realistic house sizes (e.g., a 1500sqft house ≈ 14m × 10m).
-7. Extend some rooms (garage, master suite, living room) beyond the main wall line to create architectural interest.`,
+7. Extend some rooms (garage, master suite, living room) beyond the main wall line to create architectural interest.
+8. EXTERIOR SPACES (decks, patios) MUST be on the perimeter of the house with at least one side open to the outside. Decks typically go on the BACK, porches on the FRONT. NEVER place a deck in the interior of the house.
+9. Kitchen should be adjacent to dining/living areas. Butler's pantry goes BETWEEN kitchen and dining room. Laundry near bedrooms or kitchen. Garage connects via entry or mudroom, NEVER through a bedroom.`,
       parameters: {
         type: "object",
         properties: {
@@ -777,7 +779,30 @@ Real houses are NEVER perfect rectangles. You MUST design layouts with architect
   
   DO NOT just stack rooms in a perfect grid. Think like a real architect designing a home with curb appeal.
 
-**RULE 5: SKETCH INTERPRETATION**
+**RULE 5: ROOM ACCESSIBILITY — EVERY ROOM MUST BE REACHABLE (CRITICAL)**
+Think about how a person WALKS through the house. Every room must be accessible without passing through another private room:
+  - EVERY bedroom MUST connect to a hallway or common area (living room, entry). NEVER place a bedroom behind another bedroom — no one should walk through someone's bedroom to reach another.
+  - Bathrooms should connect to a hallway OR directly to their associated bedroom (en-suite), NOT only accessible through an unrelated room.
+  - The hallway is the SPINE of the house. It connects bedrooms, bathrooms, and the main living area.
+  - Closets and en-suite bathrooms CAN be accessed only through their parent bedroom — that is the ONLY exception.
+  - Think about door placement: if two rooms share a wall but there's no door, they are NOT connected.
+
+**RULE 6: EXTERIOR SPACES (DECKS, PATIOS, PORCHES)**
+  - Decks, patios, and porches are OUTDOOR spaces. They MUST be on the PERIMETER of the house, touching an exterior edge.
+  - A deck should NEVER be surrounded by rooms on all sides — it must have at least one side open to the outside (yard).
+  - Typically decks are attached to the BACK of the house, accessible from the living room, kitchen, or dining room.
+  - Porches go at the FRONT near the entry.
+  - Decks/patios should NOT be counted in interior square footage.
+
+**RULE 7: LOGICAL ROOM ADJACENCY**
+  - Kitchen should be adjacent to or open to the dining room and/or living room (especially for "open concept").
+  - Butler's pantry connects kitchen to dining room — it should be between them, not isolated.
+  - Laundry room should be near bedrooms or kitchen, NOT in the middle of living spaces.
+  - Garage connects to the house via entry, mudroom, or kitchen — NOT through a bedroom.
+  - Master bathroom and master closet should be accessible FROM the master bedroom only.
+  - Entry/foyer should be near the front of the house, connecting to the main living area.
+
+**RULE 8: SKETCH INTERPRETATION**
 When the user uploads a floor plan image/sketch:
 1. Study every room label, dimension annotation, and spatial relationship.
 2. Count all rooms and identify their types from labels.
@@ -787,8 +812,8 @@ When the user uploads a floor plan image/sketch:
 6. Reproduce the exact room arrangement.
 7. Pay attention to hallways connecting rooms.
 
-**RULE 6: HALLWAYS**
-Use hallways (120-150cm wide) to connect bedrooms and bathrooms.
+**RULE 9: HALLWAYS**
+Use hallways (120-150cm wide) as the SPINE to connect bedrooms and bathrooms to the main living area. Every private room must be reachable from the hallway without passing through another private room.
 
 ═══ TOOLS ═══
 1. **generate_floor_plan** — Create an entire floor plan.
