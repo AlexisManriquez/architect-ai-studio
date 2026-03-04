@@ -33,6 +33,7 @@ interface AppContextValue {
   handleEnterRoom: (room: FloorPlanRoom) => void;
   handleBackToFloorPlan: () => void;
   handleSend: (text: string, userImages?: string[]) => Promise<void>;
+  updateItemPosition: (roomId: string, itemId: string, x: number, y: number) => void;
   roomCanvasRef: React.RefObject<{ getSvgElement: () => SVGSVGElement | null } | null>;
   floorPlanCanvasRef: React.RefObject<{ getSvgElement: () => SVGSVGElement | null } | null>;
 }
