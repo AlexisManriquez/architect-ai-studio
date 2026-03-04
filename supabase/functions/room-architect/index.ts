@@ -425,113 +425,451 @@ interface LayoutRect {
   x: number; y: number; width: number; height: number;
 }
 
-/**
- * Treemap-style binary space partition layout engine.
- * Guarantees zero overlaps and shared edges.
- */
-function generateProceduralLayout(
-  requestedRooms: string[],
-  totalSqft: number
-): FloorPlanRoom[] {
-  // Convert sqft to cm² (1 sqft = 929.0304 cm²)
-  const totalAreaCm2 = totalSqft * 929;
+// ─── Room Requirement Parser ────────────────────────────────────────────────
+interface RoomReq { name: string; type: string; weight: number; }
 
-  // Determine bounding box with a ~1.4:1 aspect ratio (landscape)
-  const aspectRatio = 1.4;
-  const totalHeightCm = Math.round(Math.sqrt(totalAreaCm2 / aspectRatio));
-  const totalWidthCm = Math.round(totalHeightCm * aspectRatio);
-
-  // Parse room types — handle numbered names like "bedroom-1", "bedroom-2"
-  interface RoomReq { name: string; type: string; weight: number; }
-  const roomReqs: RoomReq[] = requestedRooms.map(r => {
-    // Extract base type: "bedroom-1" → "bedroom", "master-bathroom" → "bathroom"
+function parseRoomRequirements(requestedRooms: string[]): RoomReq[] {
+  return requestedRooms.map(r => {
     let baseType = r;
     const nameParts = r.split("-");
-    // Check if last part is a number (e.g., "bedroom-1")
     if (nameParts.length > 1 && /^\d+$/.test(nameParts[nameParts.length - 1])) {
       baseType = nameParts.slice(0, -1).join("-");
     }
-    // Handle "master-bedroom" → "bedroom", "master-bathroom" → "bathroom"
     if (baseType === "master-bedroom") baseType = "bedroom";
     if (baseType === "master-bathroom") baseType = "bathroom";
-    
     const validType = ROOM_TYPES.includes(baseType as any) ? baseType : "bedroom";
     const weight = ROOM_AREA_WEIGHTS[validType] || 1.0;
-    
-    // Pretty name
     const prettyName = r.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-    
     return { name: prettyName, type: validType, weight };
   });
+}
 
-  // Calculate proportional areas
-  const totalWeight = roomReqs.reduce((s, r) => s + r.weight, 0);
-  const roomAreas = roomReqs.map(r => ({
-    ...r,
-    targetArea: (r.weight / totalWeight) * totalAreaCm2,
+// ─── Footprint Shape Definitions ────────────────────────────────────────────
+type FootprintShape = "rectangle" | "l-shape" | "t-shape";
+
+interface FootprintZone {
+  rect: LayoutRect;
+  role: "main" | "wing" | "garage-bump";
+}
+
+function chooseFootprintShape(roomCount: number, hasGarage: boolean): FootprintShape {
+  if (roomCount <= 4) return "rectangle";
+  if (roomCount <= 7) return "l-shape";
+  // Larger homes alternate between L and T
+  return roomCount % 2 === 0 ? "t-shape" : "l-shape";
+}
+
+function buildFootprintZones(
+  shape: FootprintShape,
+  totalAreaCm2: number,
+  hasGarage: boolean
+): FootprintZone[] {
+  // Base dimensions from total area with ~1.4 aspect ratio
+  const mainRatio = hasGarage ? 0.8 : 1.0; // reserve 20% area for garage bump if needed
+  const mainArea = totalAreaCm2 * mainRatio;
+
+  if (shape === "rectangle") {
+    const h = Math.round(Math.sqrt(mainArea / 1.4));
+    const w = Math.round(h * 1.4);
+    const zones: FootprintZone[] = [{ rect: { x: 0, y: 0, width: w, height: h }, role: "main" }];
+    if (hasGarage) {
+      const gw = 600, gh = 580;
+      zones.push({ rect: { x: w, y: 0, width: gw, height: gh }, role: "garage-bump" });
+    }
+    return zones;
+  }
+
+  if (shape === "l-shape") {
+    // Main body = ~60% area, wing = ~40% area
+    const mainBodyArea = mainArea * 0.6;
+    const wingArea = mainArea * 0.4;
+
+    const mainH = Math.round(Math.sqrt(mainBodyArea / 1.3));
+    const mainW = Math.round(mainBodyArea / mainH);
+    const wingW = Math.round(mainW * 0.55); // wing is narrower
+    const wingH = Math.round(wingArea / wingW);
+
+    const zones: FootprintZone[] = [
+      { rect: { x: 0, y: 0, width: mainW, height: mainH }, role: "main" },
+      // Wing extends south from the right side (creates L)
+      { rect: { x: mainW - wingW, y: mainH, width: wingW, height: wingH }, role: "wing" },
+    ];
+    if (hasGarage) {
+      const gw = 600, gh = 580;
+      // Garage bumps out from the left side of main body
+      zones.push({ rect: { x: -gw, y: 0, width: gw, height: gh }, role: "garage-bump" });
+    }
+    return zones;
+  }
+
+  // T-shape: main body + centered wing extending south
+  const mainBodyArea = mainArea * 0.55;
+  const wingArea = mainArea * 0.45;
+
+  const mainH = Math.round(Math.sqrt(mainBodyArea / 1.6));
+  const mainW = Math.round(mainBodyArea / mainH);
+  const wingW = Math.round(mainW * 0.45);
+  const wingH = Math.round(wingArea / wingW);
+
+  const wingX = Math.round((mainW - wingW) / 2); // centered
+
+  const zones: FootprintZone[] = [
+    { rect: { x: 0, y: 0, width: mainW, height: mainH }, role: "main" },
+    { rect: { x: wingX, y: mainH, width: wingW, height: wingH }, role: "wing" },
+  ];
+  if (hasGarage) {
+    const gw = 600, gh = 580;
+    zones.push({ rect: { x: mainW, y: 0, width: gw, height: gh }, role: "garage-bump" });
+  }
+  return zones;
+}
+
+/** Normalize zones so minimum x/y is 0 */
+function normalizeZones(zones: FootprintZone[]): FootprintZone[] {
+  const minX = Math.min(...zones.map(z => z.rect.x));
+  const minY = Math.min(...zones.map(z => z.rect.y));
+  return zones.map(z => ({
+    ...z,
+    rect: { ...z.rect, x: z.rect.x - minX, y: z.rect.y - minY },
   }));
+}
 
-  // Sort by area descending for better packing (largest rooms first)
-  roomAreas.sort((a, b) => b.targetArea - a.targetArea);
+// ─── Zone-aware BSP Packing ─────────────────────────────────────────────────
 
-  // Binary space partition
+function partitionIntoRect(
+  entries: Array<RoomReq & { targetArea: number }>,
+  rect: LayoutRect
+): FloorPlanRoom[] {
   const rooms: FloorPlanRoom[] = [];
-  
-  function partition(
-    entries: typeof roomAreas,
-    rect: LayoutRect
+
+  function bsp(
+    items: typeof entries,
+    r: LayoutRect
   ) {
-    if (entries.length === 0) return;
-    if (entries.length === 1) {
-      const e = entries[0];
+    if (items.length === 0) return;
+    if (items.length === 1) {
+      const e = items[0];
       const minDims = ROOM_MIN_DIMS[e.type] || { minW: 150, minH: 150 };
       rooms.push({
         id: generateId(),
         name: e.name,
         type: e.type,
-        x: Math.round(rect.x),
-        y: Math.round(rect.y),
-        width: Math.round(Math.max(rect.width, minDims.minW)),
-        height: Math.round(Math.max(rect.height, minDims.minH)),
+        x: Math.round(r.x),
+        y: Math.round(r.y),
+        width: Math.round(Math.max(r.width, minDims.minW)),
+        height: Math.round(Math.max(r.height, minDims.minH)),
       });
       return;
     }
 
-    // Split entries into two groups by area
-    const totalArea = entries.reduce((s, e) => s + e.targetArea, 0);
+    const totalArea = items.reduce((s, e) => s + e.targetArea, 0);
     let runningArea = 0;
     let splitIdx = 1;
-    for (let i = 0; i < entries.length - 1; i++) {
-      runningArea += entries[i].targetArea;
+    for (let i = 0; i < items.length - 1; i++) {
+      runningArea += items[i].targetArea;
       if (runningArea >= totalArea / 2) {
         splitIdx = i + 1;
         break;
       }
     }
 
-    const group1 = entries.slice(0, splitIdx);
-    const group2 = entries.slice(splitIdx);
-    const ratio1 = group1.reduce((s, e) => s + e.targetArea, 0) / totalArea;
+    const g1 = items.slice(0, splitIdx);
+    const g2 = items.slice(splitIdx);
+    const ratio1 = g1.reduce((s, e) => s + e.targetArea, 0) / totalArea;
 
-    // Split along the longer axis
-    if (rect.width >= rect.height) {
-      // Vertical split
-      const w1 = Math.round(rect.width * ratio1);
-      const w2 = rect.width - w1;
-      partition(group1, { x: rect.x, y: rect.y, width: w1, height: rect.height });
-      partition(group2, { x: rect.x + w1, y: rect.y, width: w2, height: rect.height });
+    if (r.width >= r.height) {
+      const w1 = Math.round(r.width * ratio1);
+      bsp(g1, { x: r.x, y: r.y, width: w1, height: r.height });
+      bsp(g2, { x: r.x + w1, y: r.y, width: r.width - w1, height: r.height });
     } else {
-      // Horizontal split
-      const h1 = Math.round(rect.height * ratio1);
-      const h2 = rect.height - h1;
-      partition(group1, { x: rect.x, y: rect.y, width: rect.width, height: h1 });
-      partition(group2, { x: rect.x, y: rect.y + h1, width: rect.width, height: h2 });
+      const h1 = Math.round(r.height * ratio1);
+      bsp(g1, { x: r.x, y: r.y, width: r.width, height: h1 });
+      bsp(g2, { x: r.x, y: r.y + h1, width: r.width, height: r.height - h1 });
     }
   }
 
-  partition(roomAreas, { x: 0, y: 0, width: totalWidthCm, height: totalHeightCm });
+  // Sort by area descending
+  const sorted = [...entries].sort((a, b) => b.targetArea - a.targetArea);
+  bsp(sorted, rect);
+  return rooms;
+}
+
+// ─── Hallway Spine for Bedroom Wings ────────────────────────────────────────
+
+const HALLWAY_WIDTH = 120; // cm
+
+/**
+ * Given a rectangle for a bedroom wing, splits off a 120cm hallway strip
+ * and packs bedrooms/bathrooms on both sides. Returns all rooms including hallway.
+ */
+function packBedroomWingWithHallway(
+  bedBathRooms: Array<RoomReq & { targetArea: number }>,
+  rect: LayoutRect
+): FloorPlanRoom[] {
+  const rooms: FloorPlanRoom[] = [];
+
+  // Decide hallway orientation: run along the longer axis
+  const isHorizontalHallway = rect.width >= rect.height;
+
+  if (isHorizontalHallway) {
+    // Hallway runs horizontally through the middle
+    const hallwayY = Math.round(rect.y + (rect.height - HALLWAY_WIDTH) / 2);
+    
+    rooms.push({
+      id: generateId(),
+      name: "Hallway",
+      type: "hallway",
+      x: Math.round(rect.x),
+      y: hallwayY,
+      width: Math.round(rect.width),
+      height: HALLWAY_WIDTH,
+    });
+
+    // Split rooms roughly in half for north and south sides
+    const northHeight = hallwayY - rect.y;
+    const southY = hallwayY + HALLWAY_WIDTH;
+    const southHeight = (rect.y + rect.height) - southY;
+
+    const half = Math.ceil(bedBathRooms.length / 2);
+    const northRooms = bedBathRooms.slice(0, half);
+    const southRooms = bedBathRooms.slice(half);
+
+    if (northRooms.length > 0 && northHeight > 150) {
+      rooms.push(...partitionIntoRect(northRooms, { x: rect.x, y: rect.y, width: rect.width, height: northHeight }));
+    } else {
+      // Not enough space north, pack all south
+      southRooms.push(...northRooms);
+    }
+
+    if (southRooms.length > 0 && southHeight > 150) {
+      rooms.push(...partitionIntoRect(southRooms, { x: rect.x, y: southY, width: rect.width, height: southHeight }));
+    }
+  } else {
+    // Hallway runs vertically through the middle
+    const hallwayX = Math.round(rect.x + (rect.width - HALLWAY_WIDTH) / 2);
+
+    rooms.push({
+      id: generateId(),
+      name: "Hallway",
+      type: "hallway",
+      x: hallwayX,
+      y: Math.round(rect.y),
+      width: HALLWAY_WIDTH,
+      height: Math.round(rect.height),
+    });
+
+    const westWidth = hallwayX - rect.x;
+    const eastX = hallwayX + HALLWAY_WIDTH;
+    const eastWidth = (rect.x + rect.width) - eastX;
+
+    const half = Math.ceil(bedBathRooms.length / 2);
+    const westRooms = bedBathRooms.slice(0, half);
+    const eastRooms = bedBathRooms.slice(half);
+
+    if (westRooms.length > 0 && westWidth > 150) {
+      rooms.push(...partitionIntoRect(westRooms, { x: rect.x, y: rect.y, width: westWidth, height: rect.height }));
+    } else {
+      eastRooms.push(...westRooms);
+    }
+
+    if (eastRooms.length > 0 && eastWidth > 150) {
+      rooms.push(...partitionIntoRect(eastRooms, { x: eastX, y: rect.y, width: eastWidth, height: rect.height }));
+    }
+  }
 
   return rooms;
+}
+
+// ─── Outdoor Space Attachment ───────────────────────────────────────────────
+const OUTDOOR_TYPES = new Set(["deck", "patio", "porch"]);
+const OUTDOOR_DEPTH = 250; // cm
+
+function attachOutdoorSpaces(
+  outdoorRooms: RoomReq[],
+  existingRooms: FloorPlanRoom[]
+): FloorPlanRoom[] {
+  if (outdoorRooms.length === 0 || existingRooms.length === 0) return [];
+
+  const maxX = Math.max(...existingRooms.map(r => r.x + r.width));
+  const maxY = Math.max(...existingRooms.map(r => r.y + r.height));
+  const minX = Math.min(...existingRooms.map(r => r.x));
+
+  const result: FloorPlanRoom[] = [];
+  for (let i = 0; i < outdoorRooms.length; i++) {
+    const od = outdoorRooms[i];
+    const isPorch = od.name.toLowerCase().includes("porch") || od.type === "entry";
+
+    if (isPorch) {
+      // Porch attaches to the FRONT (north / top)
+      const width = Math.round((maxX - minX) * 0.5);
+      const x = Math.round(minX + (maxX - minX - width) / 2);
+      result.push({
+        id: generateId(),
+        name: od.name,
+        type: od.type || "entry" as any,
+        x,
+        y: -OUTDOOR_DEPTH,
+        width,
+        height: OUTDOOR_DEPTH,
+      });
+    } else {
+      // Deck/patio attaches to the BACK (south / bottom)
+      const width = Math.round((maxX - minX) * 0.6);
+      const x = Math.round(minX + (maxX - minX - width) / 2);
+      result.push({
+        id: generateId(),
+        name: od.name,
+        type: od.type as any,
+        x,
+        y: maxY,
+        width,
+        height: OUTDOOR_DEPTH,
+      });
+    }
+  }
+  return result;
+}
+
+// ─── Main Layout Generator ──────────────────────────────────────────────────
+
+const PRIVATE_TYPES = new Set(["bedroom", "bathroom", "closet"]);
+const PUBLIC_TYPES = new Set(["living-room", "kitchen", "dining-room", "office", "laundry", "entry"]);
+
+/**
+ * Composite footprint layout engine.
+ * 1. Chooses a footprint shape (Rectangle / L / T) based on room count.
+ * 2. Separates rooms into zones: public (main body), private (wing), garage (bump), outdoor (attached outside).
+ * 3. Packs private rooms with an auto-generated hallway spine.
+ * 4. Guarantees zero overlaps and shared edges.
+ */
+function generateProceduralLayout(
+  requestedRooms: string[],
+  totalSqft: number
+): FloorPlanRoom[] {
+  const totalAreaCm2 = totalSqft * 929;
+  const allReqs = parseRoomRequirements(requestedRooms);
+
+  // Separate outdoor spaces — they get attached OUTSIDE the footprint
+  const outdoorReqs = allReqs.filter(r => OUTDOOR_TYPES.has(r.type) || OUTDOOR_TYPES.has(r.name.toLowerCase()));
+  const indoorReqs = allReqs.filter(r => !outdoorReqs.includes(r));
+
+  // Separate garage
+  const garageReqs = indoorReqs.filter(r => r.type === "garage");
+  const nonGarageReqs = indoorReqs.filter(r => r.type !== "garage");
+
+  // Separate private (bedroom wing) vs public rooms
+  const privateReqs = nonGarageReqs.filter(r => PRIVATE_TYPES.has(r.type));
+  const publicReqs = nonGarageReqs.filter(r => !PRIVATE_TYPES.has(r.type));
+
+  const hasGarage = garageReqs.length > 0;
+  const bedroomCount = privateReqs.filter(r => r.type === "bedroom").length;
+
+  // Choose footprint shape
+  const shape = chooseFootprintShape(indoorReqs.length, hasGarage);
+  console.log(`Layout engine: shape=${shape}, rooms=${indoorReqs.length}, bedrooms=${bedroomCount}, garage=${hasGarage}`);
+
+  // Build composite footprint zones
+  let zones = buildFootprintZones(shape, totalAreaCm2, hasGarage);
+  zones = normalizeZones(zones);
+
+  const mainZone = zones.find(z => z.role === "main")!;
+  const wingZone = zones.find(z => z.role === "wing");
+  const garageZone = zones.find(z => z.role === "garage-bump");
+
+  // Calculate weighted areas for each room
+  const publicWeight = publicReqs.reduce((s, r) => s + r.weight, 0);
+  const privateWeight = privateReqs.reduce((s, r) => s + r.weight, 0);
+
+  // Determine area budgets based on zones
+  const mainArea = mainZone.rect.width * mainZone.rect.height;
+  const wingArea = wingZone ? wingZone.rect.width * wingZone.rect.height : 0;
+
+  // If we have a wing, private rooms go there; public rooms go in main
+  // If no wing (rectangle), split the main zone
+  const allRooms: FloorPlanRoom[] = [];
+
+  if (wingZone && privateReqs.length > 0) {
+    // Public rooms in main zone
+    const publicWithAreas = publicReqs.map(r => ({
+      ...r,
+      targetArea: (r.weight / (publicWeight || 1)) * mainArea,
+    }));
+    allRooms.push(...partitionIntoRect(publicWithAreas, mainZone.rect));
+
+    // Private rooms in wing zone with hallway
+    const privateWithAreas = privateReqs.map(r => ({
+      ...r,
+      targetArea: (r.weight / (privateWeight || 1)) * wingArea,
+    }));
+    if (bedroomCount >= 2) {
+      allRooms.push(...packBedroomWingWithHallway(privateWithAreas, wingZone.rect));
+    } else {
+      allRooms.push(...partitionIntoRect(privateWithAreas, wingZone.rect));
+    }
+  } else {
+    // No wing — everything in main zone, but add hallway if 2+ bedrooms
+    const allIndoor = [...publicReqs, ...privateReqs];
+    const totalW = allIndoor.reduce((s, r) => s + r.weight, 0);
+    
+    if (bedroomCount >= 2) {
+      // Split main zone: left 55% for public, right 45% for private wing with hallway
+      const publicFraction = publicWeight / (totalW || 1);
+      const splitX = Math.round(mainZone.rect.x + mainZone.rect.width * Math.max(0.4, Math.min(0.65, publicFraction)));
+      
+      const publicRect: LayoutRect = { x: mainZone.rect.x, y: mainZone.rect.y, width: splitX - mainZone.rect.x, height: mainZone.rect.height };
+      const privateRect: LayoutRect = { x: splitX, y: mainZone.rect.y, width: mainZone.rect.x + mainZone.rect.width - splitX, height: mainZone.rect.height };
+
+      const pubAreas = publicReqs.map(r => ({ ...r, targetArea: (r.weight / (publicWeight || 1)) * (publicRect.width * publicRect.height) }));
+      const privAreas = privateReqs.map(r => ({ ...r, targetArea: (r.weight / (privateWeight || 1)) * (privateRect.width * privateRect.height) }));
+
+      allRooms.push(...partitionIntoRect(pubAreas, publicRect));
+      allRooms.push(...packBedroomWingWithHallway(privAreas, privateRect));
+    } else {
+      const allWithAreas = allIndoor.map(r => ({ ...r, targetArea: (r.weight / (totalW || 1)) * mainArea }));
+      allRooms.push(...partitionIntoRect(allWithAreas, mainZone.rect));
+    }
+  }
+
+  // Place garage in its bump zone
+  if (garageZone && garageReqs.length > 0) {
+    allRooms.push({
+      id: generateId(),
+      name: garageReqs[0].name,
+      type: "garage",
+      x: Math.round(garageZone.rect.x),
+      y: Math.round(garageZone.rect.y),
+      width: Math.round(garageZone.rect.width),
+      height: Math.round(garageZone.rect.height),
+    });
+  } else if (garageReqs.length > 0) {
+    // No dedicated zone — attach to the right side of the main body
+    const maxX = Math.max(...allRooms.map(r => r.x + r.width));
+    allRooms.push({
+      id: generateId(),
+      name: garageReqs[0].name,
+      type: "garage",
+      x: maxX,
+      y: 0,
+      width: 600,
+      height: 580,
+    });
+  }
+
+  // Attach outdoor spaces outside the footprint
+  const outdoorPlaced = attachOutdoorSpaces(outdoorReqs, allRooms);
+  allRooms.push(...outdoorPlaced);
+
+  // Normalize all rooms so min x/y = 0
+  const finalMinX = Math.min(...allRooms.map(r => r.x));
+  const finalMinY = Math.min(...allRooms.map(r => r.y));
+  if (finalMinX !== 0 || finalMinY !== 0) {
+    for (const r of allRooms) {
+      r.x = Math.round(r.x - finalMinX);
+      r.y = Math.round(r.y - finalMinY);
+    }
+  }
+
+  return allRooms;
 }
 
 /**
