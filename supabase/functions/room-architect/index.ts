@@ -476,6 +476,22 @@ const floorPlanTools = [
       parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "validate_floor_plan",
+      description: `INSPECTOR TOOL — You MUST call this after generate_floor_plan and after making significant changes (adding/moving/removing rooms or doors). This validates:
+1. Room connectivity — every room is reachable from the entry via doors
+2. No landlocked bedrooms — bedrooms must connect to hallway/common area, not only through other bedrooms
+3. Exterior spaces on perimeter — decks/patios are on the house edge
+4. Garage connection — garage connects to the house
+5. Missing doors — rooms sharing walls without doors
+6. Overlapping rooms
+
+If issues are found, you MUST fix them by adding doors, moving rooms, or restructuring the layout. Then call validate_floor_plan again to confirm fixes.`,
+      parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+    },
+  },
 ];
 
 // ─── Furniture Tools ────────────────────────────────────────────────────────
