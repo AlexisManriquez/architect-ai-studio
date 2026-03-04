@@ -810,6 +810,23 @@ function processFloorPlanTool(
       return { result: JSON.stringify({ rooms: roomList, doors: floorPlan.doors.length, windows: floorPlan.windows.length }), floorPlan };
     }
 
+    case "validate_floor_plan": {
+      const inspection = inspectFloorPlan(floorPlan);
+      const passed = inspection.issues.length === 0;
+      return {
+        result: JSON.stringify({
+          passed,
+          issues: inspection.issues,
+          suggestions: inspection.suggestions,
+          summary: passed
+            ? "✅ Floor plan passed all validation checks!"
+            : `❌ Found ${inspection.issues.length} issue(s) that MUST be fixed. Read each issue and fix them by adding doors, moving rooms, or restructuring. Then call validate_floor_plan again.`,
+        }),
+        floorPlan,
+        action: passed ? "✅ Floor plan validated — all checks passed" : `🔍 Inspector found ${inspection.issues.length} issue(s) to fix`,
+      };
+    }
+
     default:
       return { result: JSON.stringify({ error: `Unknown tool: ${name}` }), floorPlan };
   }
