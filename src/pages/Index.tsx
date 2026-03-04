@@ -91,7 +91,6 @@ const Index = () => {
   }, []);
 
   const handleSend = useCallback(async (text: string, userImages?: string[]) => {
-    // Track reference images (first upload in floorplan mode becomes persistent reference)
     if (userImages && userImages.length > 0 && mode === "floorplan") {
       setReferenceImages(userImages);
     }
@@ -109,13 +108,17 @@ const Index = () => {
 
     try {
       let canvasScreenshot: string | undefined;
-      try {
-        const svg = mode === "floorplan"
-          ? floorPlanCanvasRef.current?.getSvgElement()
-          : roomCanvasRef.current?.getSvgElement();
-        if (svg) canvasScreenshot = await captureSvgAsBase64(svg);
-      } catch (err) {
-        console.warn("Could not capture screenshot:", err);
+      // Skip screenshot if floor plan is empty (no rooms yet)
+      const isEmptyFloorPlan = mode === "floorplan" && floorPlan.rooms.length === 0;
+      if (!isEmptyFloorPlan) {
+        try {
+          const svg = mode === "floorplan"
+            ? floorPlanCanvasRef.current?.getSvgElement()
+            : roomCanvasRef.current?.getSvgElement();
+          if (svg) canvasScreenshot = await captureSvgAsBase64(svg);
+        } catch (err) {
+          console.warn("Could not capture screenshot:", err);
+        }
       }
 
       const requestBody: Record<string, unknown> = {
@@ -133,41 +136,88 @@ const Index = () => {
         requestBody.roomName = activeRoom.name;
       }
 
-      const { data, error } = await supabase.functions.invoke("room-architect", {
-        body: requestBody,
-      });
+      // Stream SSE response
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/room-architect`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+          },
+          body: JSON.stringify(requestBody),
+        }
+      );
 
-      if (error) throw error;
-      if (data.error) {
-        toast.error(data.error);
-        return;
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        throw new Error(errorData.error || `Request failed: ${response.status}`);
       }
 
-      const assistantMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: data.message,
-      };
-      setMessages(prev => [...prev, assistantMsg]);
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response stream");
 
-      if (mode === "floorplan" && data.floorPlan) {
-        setFloorPlan(data.floorPlan);
-      } else if (mode === "room" && data.roomState && activeRoom) {
-        setRoomStates(prev => ({ ...prev, [activeRoom.id]: data.roomState }));
-      }
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-      if (data.newItemIds && data.newItemIds.length > 0) {
-        setHighlightIds(data.newItemIds);
-        setTimeout(() => setHighlightIds([]), 4500);
-      }
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
 
-      if (data.actionLog && data.actionLog.length > 0) {
-        const newActions: ActionEntry[] = data.actionLog.map((text: string) => ({
-          id: crypto.randomUUID(),
-          text,
-          timestamp: Date.now(),
-        }));
-        setActions(prev => [...prev, ...newActions]);
+        let newlineIdx: number;
+        while ((newlineIdx = buffer.indexOf("\n\n")) !== -1) {
+          const chunk = buffer.slice(0, newlineIdx);
+          buffer = buffer.slice(newlineIdx + 2);
+
+          // Parse SSE event
+          let eventType = "message";
+          let eventData = "";
+          for (const line of chunk.split("\n")) {
+            if (line.startsWith("event: ")) eventType = line.slice(7).trim();
+            else if (line.startsWith("data: ")) eventData = line.slice(6);
+          }
+
+          if (!eventData) continue;
+
+          try {
+            const parsed = JSON.parse(eventData);
+
+            if (eventType === "action") {
+              // Show actions in real-time as they happen
+              const newAction: ActionEntry = {
+                id: crypto.randomUUID(),
+                text: parsed.text,
+                timestamp: Date.now(),
+              };
+              setActions(prev => [...prev, newAction]);
+            } else if (eventType === "error") {
+              toast.error(parsed.error);
+            } else if (eventType === "result") {
+              // Final result with all data
+              const assistantMsg: ChatMessage = {
+                id: crypto.randomUUID(),
+                role: "assistant",
+                content: parsed.message,
+              };
+              setMessages(prev => [...prev, assistantMsg]);
+
+              if (mode === "floorplan" && parsed.floorPlan) {
+                setFloorPlan(parsed.floorPlan);
+              } else if (mode === "room" && parsed.roomState && activeRoom) {
+                setRoomStates(prev => ({ ...prev, [activeRoom.id]: parsed.roomState }));
+              }
+
+              if (parsed.newItemIds && parsed.newItemIds.length > 0) {
+                setHighlightIds(parsed.newItemIds);
+                setTimeout(() => setHighlightIds([]), 4500);
+              }
+            }
+            // "done" and "progress" events don't need special handling
+          } catch {
+            // ignore parse errors on partial chunks
+          }
+        }
       }
     } catch (e: any) {
       console.error("Error:", e);
