@@ -112,7 +112,6 @@ function validateFloorPlanRooms(rooms: FloorPlanRoom[]): string[] {
   for (let i = 0; i < rooms.length; i++) {
     for (let j = i + 1; j < rooms.length; j++) {
       const a = rooms[i], b = rooms[j];
-      // Check overlap (allow shared edges but not interior overlap)
       const overlapX = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
       const overlapY = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
       if (overlapX > 1 && overlapY > 1) {
@@ -159,7 +158,7 @@ const floorPlanTools = [
           },
           doors: {
             type: "array",
-            description: "Doors between rooms. Position on shared wall edges. Horizontal door = on a horizontal shared edge. Vertical door = on a vertical shared edge.",
+            description: "Doors between rooms. Position on shared wall edges.",
             items: {
               type: "object",
               properties: {
@@ -459,7 +458,6 @@ function processFloorPlanTool(
         height: Math.round(r.height),
       }));
 
-      // Validate no overlaps
       const warnings = validateFloorPlanRooms(rooms);
 
       const totalWidth = Math.max(...rooms.map(r => r.x + r.width));
@@ -742,10 +740,9 @@ ${ROOM_TYPES.join(", ")}
 
 **RULE 1: SHARED WALLS — NO GAPS**
 Adjacent rooms MUST share exact wall edges. If Room A ends at x=500 and Room B is next to it, Room B starts at x=500.
-Example: Garage at (0,0) 500×600, Laundry at (500,0) 200×300 — they share the wall at x=500.
 
 **RULE 2: NO OVERLAPPING ROOMS**
-Rooms must never overlap. The x/y/width/height define exclusive rectangular areas.
+Rooms must never overlap.
 
 **RULE 3: REALISTIC PROPORTIONS**
 Use these as MINIMUM sizes (convert sqft → cm² by ×929):
@@ -762,41 +759,35 @@ Use these as MINIMUM sizes (convert sqft → cm² by ×929):
   - Entry: 150-250cm × 150-250cm (25-70 sqft)
 
 **RULE 4: L-SHAPED AND NON-RECTANGULAR LAYOUTS**
-Not every house is a rectangle. For L-shaped homes, T-shaped homes, etc:
-- Only place rooms where they actually go — leave empty space in the bounding box.
-- The bounding box is just the max extent, NOT a filled rectangle.
-- Look at the uploaded sketch carefully to determine the overall shape.
+Not every house is a rectangle. Only place rooms where they actually go.
 
 **RULE 5: SKETCH INTERPRETATION**
 When the user uploads a floor plan image/sketch:
-1. CAREFULLY study every room label, dimension annotation, and spatial relationship.
+1. Study every room label, dimension annotation, and spatial relationship.
 2. Count all rooms and identify their types from labels.
-3. Measure RELATIVE proportions between rooms (e.g., "the garage is roughly 2× the width of the bedroom").
-4. Preserve the EXACT spatial layout: which rooms are adjacent, which rooms are on which side.
-5. If dimensions are labeled (e.g., "14'" or "20'"), convert them: feet × 30.48 = cm.
-6. Reproduce the exact room arrangement — same rows, same adjacency relationships.
-7. Pay attention to hallways connecting rooms, and include them.
-8. If you see sqft labels, use them to calculate room sizes.
+3. Measure RELATIVE proportions between rooms.
+4. Preserve the EXACT spatial layout.
+5. If dimensions are labeled, convert: feet × 30.48 = cm.
+6. Reproduce the exact room arrangement.
+7. Pay attention to hallways connecting rooms.
 
 **RULE 6: HALLWAYS**
-Use hallways (120-150cm wide) to connect bedrooms and bathrooms. Hallways run between rooms and connect interior doors.
+Use hallways (120-150cm wide) to connect bedrooms and bathrooms.
 
 ═══ TOOLS ═══
-1. **generate_floor_plan** — Create an entire floor plan. Best for initial generation or full recreation from a sketch.
+1. **generate_floor_plan** — Create an entire floor plan.
 2. **add_room** / **remove_room** / **resize_room** / **move_room** — Modify individual rooms.
-3. **add_door** / **add_window** — Add doors (on shared walls) and windows (on exterior walls).
+3. **add_door** / **add_window** — Add doors and windows.
 4. **list_rooms** — Inspect current layout.
 
 ═══ DOOR PLACEMENT ═══
 - Doors go on SHARED WALLS between adjacent rooms.
-- If two rooms share a horizontal edge (same Y coord), use orientation="horizontal".
-- If two rooms share a vertical edge (same X coord), use orientation="vertical".
-- Place the door at the midpoint of the shared wall, offset from the corner.
+- Horizontal door = horizontal shared edge. Vertical door = vertical shared edge.
 - Exterior doors: use roomId2_index = -1.
 
 ═══ WINDOW PLACEMENT ═══
-- Windows only on EXTERIOR walls (walls not shared with another room).
-- wall="north" = top edge, wall="south" = bottom edge, wall="east" = right edge, wall="west" = left edge.
+- Windows only on EXTERIOR walls.
+- wall="north" = top edge, "south" = bottom, "east" = right, "west" = left.
 
 ═══ RESPONSE RULES ═══
 1. ALWAYS execute tools when the user asks you to DO something.
@@ -842,6 +833,11 @@ ${Object.entries(ASSET_CATALOG).filter(([,v]) => !v.isWallElement).map(([k, v]) 
 7. Against back wall: y=0. Against left wall: x=0. Against right wall: x=roomWidth-itemWidth.`;
 }
 
+// ─── SSE Helper ─────────────────────────────────────────────────────────────
+function sseEvent(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
 // ─── Main Handler ───────────────────────────────────────────────────────────
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -872,9 +868,9 @@ serve(async (req) => {
 
     const tools = isFloorPlanMode ? floorPlanTools : furnitureTools;
 
-    // Use pro model for floorplan mode (more reliable tool calling) and for vision tasks
+    // Use Flash for text-only requests, Pro only when user uploads images (sketches)
     const hasUserImages = userImages && userImages.length > 0;
-    const model = isFloorPlanMode ? "google/gemini-2.5-pro" : (hasUserImages ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash");
+    const model = hasUserImages ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash";
 
     // Build messages
     const aiMessages: Array<Record<string, unknown>> = [
@@ -885,10 +881,12 @@ serve(async (req) => {
       const msg = userMessages[i];
       if (i === userMessages.length - 1 && msg.role === "user") {
         const allImages: string[] = [];
-        if (canvasScreenshot) allImages.push(canvasScreenshot);
+        // Only include screenshot if floor plan has rooms (skip empty canvas)
+        if (canvasScreenshot && !(isFloorPlanMode && currentFloorPlan.rooms.length === 0)) {
+          allImages.push(canvasScreenshot);
+        }
         if (userImages && userImages.length > 0) allImages.push(...userImages);
         
-        // If this is a refinement with a reference sketch, prepend context
         let messageText = msg.content;
         if (hasReferenceSketch && allImages.length > 1) {
           messageText = `[REFERENCE: The second image is the ORIGINAL SKETCH that this floor plan is based on. Compare your current layout against it and fix any discrepancies the user mentions.]\n\n${messageText}`;
@@ -900,91 +898,135 @@ serve(async (req) => {
       }
     }
 
-    // Tool-call loop
-    let finalContent = "";
-    const MAX_ITERATIONS = 20;
+    // ─── Streaming SSE Response ─────────────────────────────────────────────
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          let finalContent = "";
+          const MAX_ITERATIONS = 20;
 
-    for (let i = 0; i < MAX_ITERATIONS; i++) {
-      const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          messages: aiMessages,
-          tools,
-          tool_choice: "auto",
-        }),
-      });
+          for (let i = 0; i < MAX_ITERATIONS; i++) {
+            // Send progress event
+            if (i > 0) {
+              controller.enqueue(encoder.encode(sseEvent("progress", { 
+                step: i, 
+                actions: actionLog.slice(-3) 
+              })));
+            }
 
-      if (!response.ok) {
-        const status = response.status;
-        if (status === 429) return new Response(JSON.stringify({ error: "Rate limit reached. Please wait." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-        if (status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-        const errText = await response.text();
-        console.error("AI gateway error:", status, errText);
-        throw new Error(`AI gateway returned ${status}`);
-      }
+            const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${LOVABLE_API_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model,
+                messages: aiMessages,
+                tools,
+                tool_choice: "auto",
+              }),
+            });
 
-      const data = await response.json();
-      const choice = data.choices?.[0];
-      if (!choice) throw new Error("Empty response from AI");
+            if (!response.ok) {
+              const status = response.status;
+              if (status === 429) {
+                controller.enqueue(encoder.encode(sseEvent("error", { error: "Rate limit reached. Please wait." })));
+                controller.close();
+                return;
+              }
+              if (status === 402) {
+                controller.enqueue(encoder.encode(sseEvent("error", { error: "AI credits exhausted." })));
+                controller.close();
+                return;
+              }
+              const errText = await response.text();
+              console.error("AI gateway error:", status, errText);
+              throw new Error(`AI gateway returned ${status}`);
+            }
 
-      const msg = choice.message;
-      aiMessages.push(msg);
+            const data = await response.json();
+            const choice = data.choices?.[0];
+            if (!choice) throw new Error("Empty response from AI");
 
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        for (const tc of msg.tool_calls) {
-          let args: Record<string, unknown>;
-          try {
-            args = typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments;
-          } catch {
-            aiMessages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({ error: "Invalid arguments" }) });
-            continue;
+            const msg = choice.message;
+            aiMessages.push(msg);
+
+            if (msg.tool_calls && msg.tool_calls.length > 0) {
+              for (const tc of msg.tool_calls) {
+                let args: Record<string, unknown>;
+                try {
+                  args = typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments;
+                } catch {
+                  aiMessages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({ error: "Invalid arguments" }) });
+                  continue;
+                }
+
+                if (isFloorPlanMode) {
+                  const { result, floorPlan: newPlan, action } = processFloorPlanTool(tc.function.name, args, currentFloorPlan);
+                  currentFloorPlan = newPlan;
+                  if (action) {
+                    actionLog.push(action);
+                    // Stream each action as it happens
+                    controller.enqueue(encoder.encode(sseEvent("action", { text: action })));
+                  }
+                  aiMessages.push({ role: "tool", tool_call_id: tc.id, content: result });
+                } else {
+                  const { result, roomState: newState, action } = processFurnitureTool(tc.function.name, args, currentRoomState);
+                  currentRoomState = newState;
+                  if (action) {
+                    actionLog.push(action);
+                    controller.enqueue(encoder.encode(sseEvent("action", { text: action })));
+                  }
+                  try { const p = JSON.parse(result); if (p.item_id) newItemIds.push(p.item_id); } catch {}
+                  aiMessages.push({ role: "tool", tool_call_id: tc.id, content: result });
+                }
+              }
+              continue;
+            }
+
+            finalContent = msg.content || "";
+            break;
           }
+
+          if (!finalContent && actionLog.length > 0) {
+            finalContent = `Done! I made ${actionLog.length} changes to the floor plan.`;
+          } else if (!finalContent) {
+            finalContent = "I processed your request. Take a look!";
+          }
+
+          // Send the final result with all data
+          const responseBody: Record<string, unknown> = {
+            message: finalContent,
+            actionLog,
+            newItemIds,
+          };
 
           if (isFloorPlanMode) {
-            const { result, floorPlan: newPlan, action } = processFloorPlanTool(tc.function.name, args, currentFloorPlan);
-            currentFloorPlan = newPlan;
-            if (action) actionLog.push(action);
-            aiMessages.push({ role: "tool", tool_call_id: tc.id, content: result });
+            responseBody.floorPlan = currentFloorPlan;
           } else {
-            const { result, roomState: newState, action } = processFurnitureTool(tc.function.name, args, currentRoomState);
-            currentRoomState = newState;
-            if (action) actionLog.push(action);
-            try { const p = JSON.parse(result); if (p.item_id) newItemIds.push(p.item_id); } catch {}
-            aiMessages.push({ role: "tool", tool_call_id: tc.id, content: result });
+            responseBody.roomState = currentRoomState;
           }
+
+          controller.enqueue(encoder.encode(sseEvent("result", responseBody)));
+          controller.enqueue(encoder.encode("event: done\ndata: {}\n\n"));
+          controller.close();
+        } catch (e) {
+          console.error("Stream error:", e);
+          controller.enqueue(encoder.encode(sseEvent("error", { error: e instanceof Error ? e.message : "Unknown error" })));
+          controller.close();
         }
-        continue;
-      }
+      },
+    });
 
-      finalContent = msg.content || "";
-      break;
-    }
-
-    if (!finalContent && actionLog.length > 0) {
-      finalContent = `Done! I made ${actionLog.length} changes to the floor plan.`;
-    } else if (!finalContent) {
-      finalContent = "I processed your request. Take a look!";
-    }
-
-    const responseBody: Record<string, unknown> = {
-      message: finalContent,
-      actionLog,
-      newItemIds,
-    };
-
-    if (isFloorPlanMode) {
-      responseBody.floorPlan = currentFloorPlan;
-    } else {
-      responseBody.roomState = currentRoomState;
-    }
-
-    return new Response(JSON.stringify(responseBody), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    return new Response(stream, {
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      },
     });
   } catch (e) {
     console.error("room-architect error:", e);
