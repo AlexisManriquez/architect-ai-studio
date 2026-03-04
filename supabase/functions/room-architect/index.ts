@@ -1494,8 +1494,24 @@ serve(async (req) => {
                   currentFloorPlan = newPlan;
                   if (action) {
                     actionLog.push(action);
-                    // Stream each action as it happens
                     controller.enqueue(encoder.encode(sseEvent("action", { text: action })));
+                  }
+                  // Track validation failures for graceful fallback
+                  if (tc.function.name === "validate_floor_plan") {
+                    try {
+                      const parsed = JSON.parse(result);
+                      if (!parsed.passed) {
+                        const currentIssueCount = parsed.issues?.length || 0;
+                        if (currentIssueCount > 0 && currentIssueCount === lastIssueCount) {
+                          consecutiveFailures++;
+                        } else {
+                          consecutiveFailures = currentIssueCount > 0 ? 1 : 0;
+                        }
+                        lastIssueCount = currentIssueCount;
+                      } else {
+                        consecutiveFailures = 0;
+                      }
+                    } catch {}
                   }
                   aiMessages.push({ role: "tool", tool_call_id: tc.id, content: result });
                 } else {
