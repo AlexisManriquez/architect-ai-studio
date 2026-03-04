@@ -132,10 +132,12 @@ const floorPlanTools = [
 1. Rooms MUST share exact wall edges — no gaps between adjacent rooms.
 2. Rooms MUST NOT overlap (except sharing a wall edge at exactly the same coordinate).
 3. Design CREATIVE, NON-RECTANGULAR layouts. Real houses have L-shapes, T-shapes, bump-outs, and staggered walls. NEVER make a perfect rectangle or grid.
-4. Use a hallway (120-150cm wide) to connect bedrooms and bathrooms.
+4. Use a hallway (120-150cm wide) as the SPINE connecting bedrooms and bathrooms. EVERY bedroom must connect to a hallway or common area — NEVER require walking through one bedroom to reach another.
 5. Vary room depths and widths — not all rooms in a row should have the same height.
 6. Total dimensions should reflect realistic house sizes (e.g., a 1500sqft house ≈ 14m × 10m).
-7. Extend some rooms (garage, master suite, living room) beyond the main wall line to create architectural interest.`,
+7. Extend some rooms (garage, master suite, living room) beyond the main wall line to create architectural interest.
+8. EXTERIOR SPACES (decks, patios) MUST be on the perimeter of the house with at least one side open to the outside. Decks typically go on the BACK, porches on the FRONT. NEVER place a deck in the interior of the house.
+9. Kitchen should be adjacent to dining/living areas. Butler's pantry goes BETWEEN kitchen and dining room. Laundry near bedrooms or kitchen. Garage connects via entry or mudroom, NEVER through a bedroom.`,
       parameters: {
         type: "object",
         properties: {
