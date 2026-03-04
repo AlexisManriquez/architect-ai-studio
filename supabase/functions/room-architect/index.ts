@@ -1057,6 +1057,13 @@ Real houses are NEVER perfect rectangles. You MUST design layouts with architect
   
   DO NOT just stack rooms in a perfect grid. Think like a real architect designing a home with curb appeal.
 
+**RULE 4B: NO DEAD SPACE (CRITICAL)**
+Every square meter INSIDE the house footprint must be assigned to a room. If you place a small room (butler's pantry, closet) that doesn't span the full width/height between its neighbors, you create unbuildable dead space — walls with nothing behind them. 
+  - When placing a room between two others, make sure it fills the entire gap OR adjacent rooms extend to fill remaining space.
+  - A butler's pantry between kitchen and dining should span the full depth between the hallway and the exterior wall, not leave empty gaps on either side.
+  - If a room is narrower than the space available, expand it or add a closet/utility room to fill the gap.
+  - Think about what a BUILDER would see: every wall must have a room on both sides (or be an exterior wall).
+
 **RULE 5: ROOM ACCESSIBILITY — EVERY ROOM MUST BE REACHABLE (CRITICAL)**
 Think about how a person WALKS through the house. Every room must be accessible without passing through another private room:
   - EVERY bedroom MUST connect to a hallway or common area (living room, entry). NEVER place a bedroom behind another bedroom — no one should walk through someone's bedroom to reach another.
