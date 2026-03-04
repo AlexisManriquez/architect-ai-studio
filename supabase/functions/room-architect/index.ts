@@ -228,17 +228,51 @@ function inspectFloorPlan(floorPlan: FloorPlan): { issues: string[]; suggestions
     }
   }
 
-  // 6. Check garage connectivity
+  // 6. Check garage connectivity AND perimeter placement
   const garages = rooms.filter(r => r.type === "garage");
   for (const garage of garages) {
     const neighbors = [...(adjacency[garage.id] || [])].filter(n => n !== "exterior");
     if (neighbors.length === 0) {
-      // Check if there's a hallway or room nearby that SHOULD connect
       const nearbyRooms = rooms.filter(r => r.id !== garage.id && sharesWall(garage, r));
       if (nearbyRooms.length > 0) {
         issues.push(`DISCONNECTED GARAGE: "${garage.name}" shares a wall with ${nearbyRooms.map(r => r.name).join(", ")} but has no door connecting them. Add a door to connect the garage to the house.`);
       } else {
         issues.push(`DETACHED GARAGE: "${garage.name}" doesn't share any wall with the house. Move it adjacent to the house or add a connecting hallway.`);
+      }
+    }
+
+    // NEW: Check perimeter placement — garage must touch exterior bounding box
+    const touchesEdge =
+      garage.x <= minX + 2 ||
+      garage.y <= minY + 2 ||
+      (garage.x + garage.width) >= totalWidth - 2 ||
+      (garage.y + garage.height) >= totalHeight - 2;
+
+    if (!touchesEdge) {
+      issues.push(`INTERIOR GARAGE: "${garage.name}" is surrounded by other rooms. A garage MUST be on the outer perimeter of the house so vehicles can enter. Move it to the edge of the floor plan.`);
+    }
+  }
+
+  // 6b. Check bathroom accessibility
+  const bathrooms = rooms.filter(r => r.type === "bathroom");
+  for (const bath of bathrooms) {
+    const neighbors = adjacency[bath.id] || new Set();
+    const nonExteriorNeighbors = [...neighbors].filter(n => n !== "exterior");
+
+    if (nonExteriorNeighbors.length > 0) {
+      const connectedRooms = nonExteriorNeighbors.map(nId => rooms.find(r => r.id === nId)!).filter(Boolean);
+      const connectedToCommon = connectedRooms.some(r => COMMON_ROOM_TYPES.has(r.type));
+      const connectedToBedrooms = connectedRooms.filter(r => r.type === "bedroom");
+
+      // If connected to multiple bedrooms and NO hallway/common area — awkward layout
+      if (!connectedToCommon && connectedToBedrooms.length > 1) {
+        issues.push(`AWKWARD BATHROOM: "${bath.name}" is only accessible by walking through multiple bedrooms (${connectedToBedrooms.map(b => b.name).join(", ")}). Ensure at least one door connects to a hallway, or restrict it to a single bedroom en-suite.`);
+      }
+
+      // Trapped behind utility room
+      const trappedInUtility = connectedRooms.every(r => r.type === "laundry" || r.type === "closet");
+      if (trappedInUtility) {
+        issues.push(`TRAPPED BATHROOM: "${bath.name}" is only accessible through a closet or laundry room. It must connect to a hallway, bedroom, or living area.`);
       }
     }
   }
@@ -1213,6 +1247,14 @@ Think about how a person WALKS through the house. Every room must be accessible 
   - Master bathroom and master closet should be accessible FROM the master bedroom only.
   - Entry/foyer should be near the front of the house, connecting to the main living area.
 
+**RULE 10: GARAGE PERIMETER (CRITICAL)**
+  - Garages MUST share an exterior wall with the absolute outside of the house footprint. Never place a garage entirely surrounded by other rooms. Cars must be able to drive in from outside.
+
+**RULE 11: BATHROOM ACCESSIBILITY (CRITICAL)**
+  - Guest bathrooms MUST connect to a hallway or common area (living room, entry). They should NOT be accessible only through an unrelated room.
+  - En-suite bathrooms MUST connect to exactly ONE bedroom. If a bathroom connects to multiple bedrooms without a hallway connection, that's an awkward layout.
+  - Bathrooms must NEVER be trapped behind closets, laundry rooms, or utility spaces.
+
 **RULE 8: SKETCH INTERPRETATION**
 When the user uploads a floor plan image/sketch:
 1. Study every room label, dimension annotation, and spatial relationship.
@@ -1368,6 +1410,9 @@ serve(async (req) => {
           let finalContent = "";
           const MAX_ITERATIONS = 20;
 
+          let consecutiveFailures = 0;
+          let lastIssueCount = -1;
+
           for (let i = 0; i < MAX_ITERATIONS; i++) {
             // Send progress event
             if (i > 0) {
@@ -1375,6 +1420,18 @@ serve(async (req) => {
                 step: i, 
                 actions: actionLog.slice(-3) 
               })));
+            }
+
+            // Graceful fallback: if validation keeps failing with same issues, restart
+            if (isFloorPlanMode && consecutiveFailures >= 5) {
+              console.log("Graceful fallback triggered — resetting floor plan after 5 failed validation attempts");
+              currentFloorPlan = { id: generateId(), name: currentFloorPlan.name, totalWidth: 0, totalHeight: 0, rooms: [], doors: [], windows: [] };
+              consecutiveFailures = 0;
+              lastIssueCount = -1;
+              actionLog.push("🔄 Restarting layout — previous attempt had persistent issues");
+              controller.enqueue(encoder.encode(sseEvent("action", { text: "🔄 Restarting with a simpler layout approach" })));
+              // Inject restart instruction
+              aiMessages.push({ role: "user", content: "The previous layout had persistent issues that couldn't be fixed. Start over with a SIMPLER, more conventional layout. Use a straightforward L-shape or rectangle with a central hallway. Prioritize correctness over creativity." });
             }
 
             // Force tool use on first call when no actions taken yet
@@ -1437,8 +1494,24 @@ serve(async (req) => {
                   currentFloorPlan = newPlan;
                   if (action) {
                     actionLog.push(action);
-                    // Stream each action as it happens
                     controller.enqueue(encoder.encode(sseEvent("action", { text: action })));
+                  }
+                  // Track validation failures for graceful fallback
+                  if (tc.function.name === "validate_floor_plan") {
+                    try {
+                      const parsed = JSON.parse(result);
+                      if (!parsed.passed) {
+                        const currentIssueCount = parsed.issues?.length || 0;
+                        if (currentIssueCount > 0 && currentIssueCount === lastIssueCount) {
+                          consecutiveFailures++;
+                        } else {
+                          consecutiveFailures = currentIssueCount > 0 ? 1 : 0;
+                        }
+                        lastIssueCount = currentIssueCount;
+                      } else {
+                        consecutiveFailures = 0;
+                      }
+                    } catch {}
                   }
                   aiMessages.push({ role: "tool", tool_call_id: tc.id, content: result });
                 } else {
