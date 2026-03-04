@@ -118,15 +118,12 @@ const Index = () => {
         console.warn("Could not capture screenshot:", err);
       }
 
-      // Always include reference images (original sketch) on follow-up floorplan requests
-      const imagesToSend = userImages || (mode === "floorplan" && referenceImages.length > 0 ? referenceImages : undefined);
-
       const requestBody: Record<string, unknown> = {
         messages: updatedMessages.map(m => ({ role: m.role, content: m.content })),
         mode,
         canvasScreenshot,
-        images: imagesToSend,
-        hasReferenceSketch: mode === "floorplan" && referenceImages.length > 0 && !userImages,
+        images: userImages,
+        hasReferenceSketch: false,
       };
 
       if (mode === "floorplan") {
