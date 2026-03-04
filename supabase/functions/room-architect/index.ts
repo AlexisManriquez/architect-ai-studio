@@ -389,79 +389,275 @@ function sharesWall(a: FloorPlanRoom, b: FloorPlanRoom): boolean {
   return verticalShare || horizontalShare;
 }
 
+// ─── Procedural Layout Engine ───────────────────────────────────────────────
+
+/** Target area ratios for each room type (relative weight) */
+const ROOM_AREA_WEIGHTS: Record<string, number> = {
+  "living-room": 1.8,
+  "kitchen": 1.2,
+  "dining-room": 1.0,
+  "bedroom": 1.3,
+  "bathroom": 0.5,
+  "office": 0.9,
+  "garage": 2.2,
+  "hallway": 0.4,
+  "closet": 0.2,
+  "laundry": 0.35,
+  "entry": 0.25,
+};
+
+/** Minimum dimensions per room type in cm */
+const ROOM_MIN_DIMS: Record<string, { minW: number; minH: number }> = {
+  "living-room": { minW: 400, minH: 350 },
+  "kitchen": { minW: 300, minH: 280 },
+  "dining-room": { minW: 300, minH: 280 },
+  "bedroom": { minW: 300, minH: 300 },
+  "bathroom": { minW: 180, minH: 180 },
+  "office": { minW: 250, minH: 250 },
+  "garage": { minW: 500, minH: 500 },
+  "hallway": { minW: 120, minH: 120 },
+  "closet": { minW: 120, minH: 120 },
+  "laundry": { minW: 180, minH: 180 },
+  "entry": { minW: 150, minH: 150 },
+};
+
+interface LayoutRect {
+  x: number; y: number; width: number; height: number;
+}
+
+/**
+ * Treemap-style binary space partition layout engine.
+ * Guarantees zero overlaps and shared edges.
+ */
+function generateProceduralLayout(
+  requestedRooms: string[],
+  totalSqft: number
+): FloorPlanRoom[] {
+  // Convert sqft to cm² (1 sqft = 929.0304 cm²)
+  const totalAreaCm2 = totalSqft * 929;
+
+  // Determine bounding box with a ~1.4:1 aspect ratio (landscape)
+  const aspectRatio = 1.4;
+  const totalHeightCm = Math.round(Math.sqrt(totalAreaCm2 / aspectRatio));
+  const totalWidthCm = Math.round(totalHeightCm * aspectRatio);
+
+  // Parse room types — handle numbered names like "bedroom-1", "bedroom-2"
+  interface RoomReq { name: string; type: string; weight: number; }
+  const roomReqs: RoomReq[] = requestedRooms.map(r => {
+    // Extract base type: "bedroom-1" → "bedroom", "master-bathroom" → "bathroom"
+    let baseType = r;
+    const nameParts = r.split("-");
+    // Check if last part is a number (e.g., "bedroom-1")
+    if (nameParts.length > 1 && /^\d+$/.test(nameParts[nameParts.length - 1])) {
+      baseType = nameParts.slice(0, -1).join("-");
+    }
+    // Handle "master-bedroom" → "bedroom", "master-bathroom" → "bathroom"
+    if (baseType === "master-bedroom") baseType = "bedroom";
+    if (baseType === "master-bathroom") baseType = "bathroom";
+    
+    const validType = ROOM_TYPES.includes(baseType as any) ? baseType : "bedroom";
+    const weight = ROOM_AREA_WEIGHTS[validType] || 1.0;
+    
+    // Pretty name
+    const prettyName = r.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    
+    return { name: prettyName, type: validType, weight };
+  });
+
+  // Calculate proportional areas
+  const totalWeight = roomReqs.reduce((s, r) => s + r.weight, 0);
+  const roomAreas = roomReqs.map(r => ({
+    ...r,
+    targetArea: (r.weight / totalWeight) * totalAreaCm2,
+  }));
+
+  // Sort by area descending for better packing (largest rooms first)
+  roomAreas.sort((a, b) => b.targetArea - a.targetArea);
+
+  // Binary space partition
+  const rooms: FloorPlanRoom[] = [];
+  
+  function partition(
+    entries: typeof roomAreas,
+    rect: LayoutRect
+  ) {
+    if (entries.length === 0) return;
+    if (entries.length === 1) {
+      const e = entries[0];
+      const minDims = ROOM_MIN_DIMS[e.type] || { minW: 150, minH: 150 };
+      rooms.push({
+        id: generateId(),
+        name: e.name,
+        type: e.type,
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(Math.max(rect.width, minDims.minW)),
+        height: Math.round(Math.max(rect.height, minDims.minH)),
+      });
+      return;
+    }
+
+    // Split entries into two groups by area
+    const totalArea = entries.reduce((s, e) => s + e.targetArea, 0);
+    let runningArea = 0;
+    let splitIdx = 1;
+    for (let i = 0; i < entries.length - 1; i++) {
+      runningArea += entries[i].targetArea;
+      if (runningArea >= totalArea / 2) {
+        splitIdx = i + 1;
+        break;
+      }
+    }
+
+    const group1 = entries.slice(0, splitIdx);
+    const group2 = entries.slice(splitIdx);
+    const ratio1 = group1.reduce((s, e) => s + e.targetArea, 0) / totalArea;
+
+    // Split along the longer axis
+    if (rect.width >= rect.height) {
+      // Vertical split
+      const w1 = Math.round(rect.width * ratio1);
+      const w2 = rect.width - w1;
+      partition(group1, { x: rect.x, y: rect.y, width: w1, height: rect.height });
+      partition(group2, { x: rect.x + w1, y: rect.y, width: w2, height: rect.height });
+    } else {
+      // Horizontal split
+      const h1 = Math.round(rect.height * ratio1);
+      const h2 = rect.height - h1;
+      partition(group1, { x: rect.x, y: rect.y, width: rect.width, height: h1 });
+      partition(group2, { x: rect.x, y: rect.y + h1, width: rect.width, height: h2 });
+    }
+  }
+
+  partition(roomAreas, { x: 0, y: 0, width: totalWidthCm, height: totalHeightCm });
+
+  return rooms;
+}
+
+/**
+ * Auto-generate doors between all pairs of adjacent rooms that share a wall,
+ * plus exterior doors on entry/garage rooms.
+ */
+function autoGenerateDoors(rooms: FloorPlanRoom[]): FloorPlanDoor[] {
+  const doors: FloorPlanDoor[] = [];
+  const connected = new Set<string>(); // "id1-id2" pairs
+
+  for (let i = 0; i < rooms.length; i++) {
+    for (let j = i + 1; j < rooms.length; j++) {
+      const wall = findSharedWall(rooms[i], rooms[j]);
+      if (!wall) continue;
+      
+      const pairKey = [rooms[i].id, rooms[j].id].sort().join("-");
+      if (connected.has(pairKey)) continue;
+      connected.add(pairKey);
+
+      const doorWidth = 90;
+      let door: FloorPlanDoor;
+      if (wall.orientation === "horizontal") {
+        const cx = wall.x + wall.length / 2;
+        door = {
+          id: generateId(),
+          roomId1: rooms[i].id,
+          roomId2: rooms[j].id,
+          x: Math.round(cx - doorWidth / 2),
+          y: Math.round(wall.y),
+          width: doorWidth,
+          orientation: "horizontal",
+        };
+      } else {
+        const cy = wall.y + wall.length / 2;
+        door = {
+          id: generateId(),
+          roomId1: rooms[i].id,
+          roomId2: rooms[j].id,
+          x: Math.round(wall.x),
+          y: Math.round(cy - doorWidth / 2),
+          width: doorWidth,
+          orientation: "vertical",
+        };
+      }
+      doors.push(door);
+    }
+  }
+
+  // Add exterior doors for entry and garage rooms
+  for (const room of rooms) {
+    if (room.type === "entry" || room.type === "garage") {
+      // Find an exterior wall (one touching the bounding box edge)
+      const allRooms = rooms;
+      const maxX = Math.max(...allRooms.map(r => r.x + r.width));
+      const maxY = Math.max(...allRooms.map(r => r.y + r.height));
+
+      let door: FloorPlanDoor | null = null;
+      if (room.y <= 2) {
+        // North exterior wall
+        door = { id: generateId(), roomId1: room.id, roomId2: "exterior", x: Math.round(room.x + room.width / 2 - 45), y: room.y, width: 90, orientation: "horizontal" };
+      } else if (room.y + room.height >= maxY - 2) {
+        // South exterior wall
+        door = { id: generateId(), roomId1: room.id, roomId2: "exterior", x: Math.round(room.x + room.width / 2 - 45), y: room.y + room.height, width: 90, orientation: "horizontal" };
+      } else if (room.x <= 2) {
+        // West exterior wall
+        door = { id: generateId(), roomId1: room.id, roomId2: "exterior", x: room.x, y: Math.round(room.y + room.height / 2 - 45), width: 90, orientation: "vertical" };
+      } else if (room.x + room.width >= maxX - 2) {
+        // East exterior wall
+        door = { id: generateId(), roomId1: room.id, roomId2: "exterior", x: room.x + room.width, y: Math.round(room.y + room.height / 2 - 45), width: 90, orientation: "vertical" };
+      }
+      if (door) doors.push(door);
+    }
+  }
+
+  return doors;
+}
+
+/**
+ * Auto-generate windows on exterior walls of rooms (except garages, hallways, closets).
+ */
+function autoGenerateWindows(rooms: FloorPlanRoom[]): FloorPlanWindow[] {
+  const windows: FloorPlanWindow[] = [];
+  const maxX = Math.max(...rooms.map(r => r.x + r.width));
+  const maxY = Math.max(...rooms.map(r => r.y + r.height));
+  const skipTypes = new Set(["hallway", "closet", "garage", "entry"]);
+
+  for (const room of rooms) {
+    if (skipTypes.has(room.type)) continue;
+
+    // Check each wall for exterior exposure
+    if (room.y <= 2 && room.width >= 150) {
+      windows.push({ id: generateId(), roomId: room.id, x: Math.round(room.x + room.width / 2 - 50), y: room.y, width: 100, orientation: "horizontal", wall: "north" });
+    }
+    if (room.y + room.height >= maxY - 2 && room.width >= 150) {
+      windows.push({ id: generateId(), roomId: room.id, x: Math.round(room.x + room.width / 2 - 50), y: room.y + room.height, width: 100, orientation: "horizontal", wall: "south" });
+    }
+    if (room.x <= 2 && room.height >= 150) {
+      windows.push({ id: generateId(), roomId: room.id, x: room.x, y: Math.round(room.y + room.height / 2 - 50), width: 100, orientation: "vertical", wall: "west" });
+    }
+    if (room.x + room.width >= maxX - 2 && room.height >= 150) {
+      windows.push({ id: generateId(), roomId: room.id, x: room.x + room.width, y: Math.round(room.y + room.height / 2 - 50), width: 100, orientation: "vertical", wall: "east" });
+    }
+  }
+
+  return windows;
+}
+
 // ─── Floor Plan Tools ───────────────────────────────────────────────────────
 const floorPlanTools = [
   {
     type: "function",
     function: {
       name: "generate_floor_plan",
-      description: `Generate a complete floor plan. CRITICAL RULES for room placement:
-1. Rooms MUST share exact wall edges — no gaps between adjacent rooms.
-2. Rooms MUST NOT overlap (except sharing a wall edge at exactly the same coordinate).
-3. Design CREATIVE, NON-RECTANGULAR layouts. Real houses have L-shapes, T-shapes, bump-outs, and staggered walls. NEVER make a perfect rectangle or grid.
-4. Use a hallway (120-150cm wide) as the SPINE connecting bedrooms and bathrooms. EVERY bedroom must connect to a hallway or common area — NEVER require walking through one bedroom to reach another.
-5. Vary room depths and widths — not all rooms in a row should have the same height.
-6. Total dimensions should reflect realistic house sizes (e.g., a 1500sqft house ≈ 14m × 10m).
-7. Extend some rooms (garage, master suite, living room) beyond the main wall line to create architectural interest.
-8. EXTERIOR SPACES (decks, patios) MUST be on the perimeter of the house with at least one side open to the outside. Decks typically go on the BACK, porches on the FRONT. NEVER place a deck in the interior of the house.
-9. Kitchen should be adjacent to dining/living areas. Butler's pantry goes BETWEEN kitchen and dining room. Laundry near bedrooms or kitchen. Garage connects via entry or mudroom, NEVER through a bedroom.`,
+      description: `Generate a complete floor plan. You provide the room list and target square footage — the backend physics engine handles all coordinate math, door placement, and window placement automatically. Just decide WHAT rooms are needed.`,
       parameters: {
         type: "object",
         properties: {
-          name: { type: "string", description: "Name for the floor plan" },
-          rooms: {
+          name: { type: "string", description: "Name for the floor plan (e.g. 'Modern Ranch Home')" },
+          target_sqft: { type: "number", description: "Total approximate square footage of the house (e.g. 1500, 2200)" },
+          requested_rooms: {
             type: "array",
-            description: "Array of rooms. Rooms MUST tile together with shared edges. Use precise coordinates so adjacent rooms share exact wall positions.",
-            items: {
-              type: "object",
-              properties: {
-                name: { type: "string" },
-                type: { type: "string", enum: [...ROOM_TYPES] },
-                x: { type: "number", description: "X position in cm from left edge" },
-                y: { type: "number", description: "Y position in cm from top edge" },
-                width: { type: "number", description: "Width in cm (horizontal extent)" },
-                height: { type: "number", description: "Height in cm (vertical extent)" },
-              },
-              required: ["name", "type", "x", "y", "width", "height"],
-              additionalProperties: false,
-            },
-          },
-          doors: {
-            type: "array",
-            description: "Doors between rooms. Position on shared wall edges.",
-            items: {
-              type: "object",
-              properties: {
-                roomId1_index: { type: "number", description: "Index of first room in rooms array" },
-                roomId2_index: { type: "number", description: "Index of second room (-1 for exterior)" },
-                x: { type: "number", description: "X position of door center on wall" },
-                y: { type: "number", description: "Y position of door center on wall" },
-                width: { type: "number", description: "Door width in cm (typically 90)" },
-                orientation: { type: "string", enum: ["horizontal", "vertical"] },
-              },
-              required: ["roomId1_index", "roomId2_index", "x", "y", "width", "orientation"],
-              additionalProperties: false,
-            },
-          },
-          windows: {
-            type: "array",
-            description: "Windows on exterior walls only.",
-            items: {
-              type: "object",
-              properties: {
-                roomId_index: { type: "number", description: "Index of room in rooms array" },
-                x: { type: "number", description: "X position" },
-                y: { type: "number", description: "Y position" },
-                width: { type: "number", description: "Window width in cm (typically 100-120)" },
-                orientation: { type: "string", enum: ["horizontal", "vertical"] },
-                wall: { type: "string", enum: ["north", "south", "east", "west"] },
-              },
-              required: ["roomId_index", "x", "y", "width", "orientation", "wall"],
-              additionalProperties: false,
-            },
+            description: "List of room identifiers. Use the room type, optionally with a number suffix for duplicates. Examples: 'living-room', 'kitchen', 'bedroom-1', 'bedroom-2', 'master-bedroom', 'bathroom', 'master-bathroom', 'garage', 'hallway', 'entry', 'office', 'laundry', 'closet-1'.",
+            items: { type: "string" },
           },
         },
-        required: ["name", "rooms", "doors", "windows"],
+        required: ["name", "target_sqft", "requested_rooms"],
         additionalProperties: false,
       },
     },
