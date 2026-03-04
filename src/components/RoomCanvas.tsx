@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect, forwardRef, useImperativeHandle } from "react";
 import type { RoomState, PlacedItem } from "@/types/room";
 import { ASSET_CATALOG } from "@/data/assetCatalog";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { useAppContext } from "@/context/AppContext";
 import ActionLog, { type ActionEntry } from "@/components/ActionLog";
 
 interface RoomCanvasProps {
@@ -27,6 +27,11 @@ const RoomCanvas = forwardRef<RoomCanvasHandle, RoomCanvasProps>(
     const [panStart, setPanStart] = useState({ x: 0, y: 0 });
     const [hoveredItem, setHoveredItem] = useState<string | null>(null);
 
+    // Drag state
+    const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+    const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+
+    const { activeRoom, updateItemPosition } = useAppContext();
     const { roomWidth, roomDepth, items } = roomState;
 
     useImperativeHandle(ref, () => ({
@@ -54,18 +59,47 @@ const RoomCanvas = forwardRef<RoomCanvasHandle, RoomCanvasProps>(
     }, []);
 
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
+      if (draggingItemId) return; // don't pan while dragging
       if (e.button === 1 || e.button === 0) {
         setIsPanning(true);
         setPanStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
       }
-    }, [offset]);
+    }, [offset, draggingItemId]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
+      if (draggingItemId && activeRoom) {
+        // Convert screen coords to canvas coords
+        const newX = (e.clientX - offset.x) / scale - dragOffset.x;
+        const newY = (e.clientY - offset.y) / scale - dragOffset.y;
+        // Clamp within room bounds
+        const def = items.find(i => i.id === draggingItemId);
+        if (def) {
+          const itemDef = ASSET_CATALOG[def.type];
+          const isRotated = def.rotation === 90 || def.rotation === 270;
+          const w = isRotated ? (itemDef?.height || 0) : (itemDef?.width || 0);
+          const h = isRotated ? (itemDef?.width || 0) : (itemDef?.height || 0);
+          const clampedX = Math.max(0, Math.min(newX, roomWidth - w));
+          const clampedY = Math.max(0, Math.min(newY, roomDepth - h));
+          updateItemPosition(activeRoom.id, draggingItemId, clampedX, clampedY);
+        }
+        return;
+      }
       if (!isPanning) return;
       setOffset({ x: e.clientX - panStart.x, y: e.clientY - panStart.y });
-    }, [isPanning, panStart]);
+    }, [isPanning, panStart, draggingItemId, dragOffset, offset, scale, activeRoom, items, roomWidth, roomDepth, updateItemPosition]);
 
-    const handleMouseUp = useCallback(() => setIsPanning(false), []);
+    const handleMouseUp = useCallback(() => {
+      setIsPanning(false);
+      setDraggingItemId(null);
+    }, []);
+
+    const handleItemMouseDown = useCallback((e: React.MouseEvent, item: PlacedItem) => {
+      e.stopPropagation();
+      const itemX = (e.clientX - offset.x) / scale - item.x;
+      const itemY = (e.clientY - offset.y) / scale - item.y;
+      setDragOffset({ x: itemX, y: itemY });
+      setDraggingItemId(item.id);
+    }, [offset, scale]);
 
     const renderItem = (item: PlacedItem) => {
       const def = ASSET_CATALOG[item.type];
@@ -85,6 +119,7 @@ const RoomCanvas = forwardRef<RoomCanvasHandle, RoomCanvasProps>(
       const h = isRotated ? def.width : def.height;
       const isHighlighted = highlightIds.includes(item.id);
       const isHovered = hoveredItem === item.id;
+      const isDragging = draggingItemId === item.id;
 
       return (
         <g
@@ -92,7 +127,8 @@ const RoomCanvas = forwardRef<RoomCanvasHandle, RoomCanvasProps>(
           transform={`translate(${item.x}, ${item.y})`}
           onMouseEnter={() => setHoveredItem(item.id)}
           onMouseLeave={() => setHoveredItem(null)}
-          style={{ cursor: "pointer" }}
+          onMouseDown={(e) => handleItemMouseDown(e, item)}
+          style={{ cursor: isDragging ? "grabbing" : "grab" }}
         >
           {/* Highlight glow */}
           {isHighlighted && (
@@ -110,14 +146,29 @@ const RoomCanvas = forwardRef<RoomCanvasHandle, RoomCanvasProps>(
               <animate attributeName="opacity" values="0.7;0.3;0.7" dur="1.5s" repeatCount="3" />
             </rect>
           )}
+          {/* Drag shadow */}
+          {isDragging && (
+            <rect
+              width={w + 4}
+              height={h + 4}
+              x={-2}
+              y={-2}
+              fill="none"
+              stroke="hsl(var(--primary))"
+              strokeWidth={2}
+              strokeDasharray="4 2"
+              rx={5}
+              opacity={0.5}
+            />
+          )}
           <rect
             width={w}
             height={h}
             fill={fill}
-            stroke={isHovered ? "hsl(var(--primary))" : "hsl(var(--foreground))"}
-            strokeWidth={isHovered ? 2.5 : 1.5}
+            stroke={isDragging ? "hsl(var(--primary))" : isHovered ? "hsl(var(--primary))" : "hsl(var(--foreground))"}
+            strokeWidth={isDragging ? 3 : isHovered ? 2.5 : 1.5}
             rx={4}
-            opacity={0.85}
+            opacity={isDragging ? 0.9 : 0.85}
           />
           <text
             x={w / 2}
@@ -132,7 +183,7 @@ const RoomCanvas = forwardRef<RoomCanvasHandle, RoomCanvasProps>(
             {def.label}
           </text>
           {/* Hover tooltip overlay */}
-          {isHovered && (
+          {isHovered && !isDragging && (
             <g>
               <rect
                 x={w / 2 - 60}
@@ -177,7 +228,8 @@ const RoomCanvas = forwardRef<RoomCanvasHandle, RoomCanvasProps>(
     return (
       <div
         ref={containerRef}
-        className="flex-1 bg-background overflow-hidden cursor-grab active:cursor-grabbing relative"
+        className="flex-1 bg-background overflow-hidden relative"
+        style={{ cursor: draggingItemId ? "grabbing" : isPanning ? "grabbing" : "grab" }}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
