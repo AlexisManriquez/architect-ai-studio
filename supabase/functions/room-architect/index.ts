@@ -694,6 +694,120 @@ function validatePlacement(
   return { valid: true };
 }
 
+// ─── Door & Window Auto-Correction ──────────────────────────────────────────
+
+/** Find the shared wall segment between two rooms. Returns null if they don't share a wall. */
+function findSharedWall(r1: FloorPlanRoom, r2: FloorPlanRoom): { orientation: "horizontal" | "vertical"; x: number; y: number; length: number } | null {
+  const TOLERANCE = 5;
+  // Vertical shared wall: r1's right = r2's left or vice versa
+  if (Math.abs((r1.x + r1.width) - r2.x) < TOLERANCE) {
+    const overlapStart = Math.max(r1.y, r2.y);
+    const overlapEnd = Math.min(r1.y + r1.height, r2.y + r2.height);
+    if (overlapEnd - overlapStart > 10) {
+      return { orientation: "vertical", x: r1.x + r1.width, y: overlapStart, length: overlapEnd - overlapStart };
+    }
+  }
+  if (Math.abs((r2.x + r2.width) - r1.x) < TOLERANCE) {
+    const overlapStart = Math.max(r1.y, r2.y);
+    const overlapEnd = Math.min(r1.y + r1.height, r2.y + r2.height);
+    if (overlapEnd - overlapStart > 10) {
+      return { orientation: "vertical", x: r1.x, y: overlapStart, length: overlapEnd - overlapStart };
+    }
+  }
+  // Horizontal shared wall: r1's bottom = r2's top or vice versa
+  if (Math.abs((r1.y + r1.height) - r2.y) < TOLERANCE) {
+    const overlapStart = Math.max(r1.x, r2.x);
+    const overlapEnd = Math.min(r1.x + r1.width, r2.x + r2.width);
+    if (overlapEnd - overlapStart > 10) {
+      return { orientation: "horizontal", x: overlapStart, y: r1.y + r1.height, length: overlapEnd - overlapStart };
+    }
+  }
+  if (Math.abs((r2.y + r2.height) - r1.y) < TOLERANCE) {
+    const overlapStart = Math.max(r1.x, r2.x);
+    const overlapEnd = Math.min(r1.x + r1.width, r2.x + r2.width);
+    if (overlapEnd - overlapStart > 10) {
+      return { orientation: "horizontal", x: overlapStart, y: r1.y, length: overlapEnd - overlapStart };
+    }
+  }
+  return null;
+}
+
+/** Snap a door to the correct position on the shared wall between its two rooms */
+function snapDoorToWall(door: FloorPlanDoor, rooms: FloorPlanRoom[]): FloorPlanDoor {
+  const room1 = rooms.find(r => r.id === door.roomId1);
+  const room2 = rooms.find(r => r.id === door.roomId2);
+  
+  if (door.roomId1 === "exterior" || door.roomId2 === "exterior") {
+    // Exterior door — snap to the room's exterior wall
+    const room = room1 || room2;
+    if (!room) return door;
+    return snapDoorToExteriorWall(door, room);
+  }
+  
+  if (!room1 || !room2) return door;
+  
+  const wall = findSharedWall(room1, room2);
+  if (!wall) return door; // Can't find shared wall, keep as-is
+  
+  const corrected = { ...door, orientation: wall.orientation };
+  if (wall.orientation === "horizontal") {
+    corrected.y = wall.y;
+    // Center door along the shared wall segment
+    const wallCenter = wall.x + wall.length / 2;
+    corrected.x = Math.round(wallCenter - door.width / 2);
+    // Clamp to wall bounds
+    corrected.x = Math.max(wall.x + 10, Math.min(corrected.x, wall.x + wall.length - door.width - 10));
+  } else {
+    corrected.x = wall.x;
+    const wallCenter = wall.y + wall.length / 2;
+    corrected.y = Math.round(wallCenter - door.width / 2);
+    corrected.y = Math.max(wall.y + 10, Math.min(corrected.y, wall.y + wall.length - door.width - 10));
+  }
+  return corrected;
+}
+
+function snapDoorToExteriorWall(door: FloorPlanDoor, room: FloorPlanRoom): FloorPlanDoor {
+  // Find which exterior wall is closest to the door's current position
+  const distances = [
+    { wall: "north" as const, dist: Math.abs(door.y - room.y), orientation: "horizontal" as const, y: room.y, x: room.x + room.width / 2 - door.width / 2 },
+    { wall: "south" as const, dist: Math.abs(door.y - (room.y + room.height)), orientation: "horizontal" as const, y: room.y + room.height, x: room.x + room.width / 2 - door.width / 2 },
+    { wall: "west" as const, dist: Math.abs(door.x - room.x), orientation: "vertical" as const, x: room.x, y: room.y + room.height / 2 - door.width / 2 },
+    { wall: "east" as const, dist: Math.abs(door.x - (room.x + room.width)), orientation: "vertical" as const, x: room.x + room.width, y: room.y + room.height / 2 - door.width / 2 },
+  ];
+  distances.sort((a, b) => a.dist - b.dist);
+  const best = distances[0];
+  return { ...door, x: Math.round(best.x), y: Math.round(best.y), orientation: best.orientation };
+}
+
+/** Snap a window to the correct position on the room's exterior wall */
+function snapWindowToWall(win: FloorPlanWindow, room: FloorPlanRoom): FloorPlanWindow {
+  if (!room) return win;
+  const corrected = { ...win };
+  switch (win.wall) {
+    case "north":
+      corrected.y = room.y;
+      corrected.x = Math.max(room.x + 15, Math.min(Math.round(win.x), room.x + room.width - win.width - 15));
+      corrected.orientation = "horizontal";
+      break;
+    case "south":
+      corrected.y = room.y + room.height;
+      corrected.x = Math.max(room.x + 15, Math.min(Math.round(win.x), room.x + room.width - win.width - 15));
+      corrected.orientation = "horizontal";
+      break;
+    case "west":
+      corrected.x = room.x;
+      corrected.y = Math.max(room.y + 15, Math.min(Math.round(win.y), room.y + room.height - win.width - 15));
+      corrected.orientation = "vertical";
+      break;
+    case "east":
+      corrected.x = room.x + room.width;
+      corrected.y = Math.max(room.y + 15, Math.min(Math.round(win.y), room.y + room.height - win.width - 15));
+      corrected.orientation = "vertical";
+      break;
+  }
+  return corrected;
+}
+
 // ─── Floor Plan Tool Processor ──────────────────────────────────────────────
 function processFloorPlanTool(
   name: string, args: Record<string, unknown>, floorPlan: FloorPlan
@@ -715,7 +829,8 @@ function processFloorPlanTool(
       const totalWidth = Math.max(...rooms.map(r => r.x + r.width));
       const totalHeight = Math.max(...rooms.map(r => r.y + r.height));
 
-      const doors: FloorPlanDoor[] = ((args.doors as any[]) || []).map((d) => ({
+      // Create doors and auto-snap to shared walls
+      let doors: FloorPlanDoor[] = ((args.doors as any[]) || []).map((d) => ({
         id: generateId(),
         roomId1: d.roomId1_index >= 0 ? rooms[d.roomId1_index]?.id || "exterior" : "exterior",
         roomId2: d.roomId2_index >= 0 ? rooms[d.roomId2_index]?.id || "exterior" : "exterior",
@@ -724,8 +839,11 @@ function processFloorPlanTool(
         width: Math.round(d.width),
         orientation: d.orientation,
       }));
+      // Auto-correct door positions to be on shared walls
+      doors = doors.map(d => snapDoorToWall(d, rooms));
 
-      const windows: FloorPlanWindow[] = ((args.windows as any[]) || []).map((w) => ({
+      // Create windows and auto-snap to exterior walls
+      let windows: FloorPlanWindow[] = ((args.windows as any[]) || []).map((w) => ({
         id: generateId(),
         roomId: w.roomId_index >= 0 ? rooms[w.roomId_index]?.id || "" : "",
         x: Math.round(w.x),
@@ -734,6 +852,11 @@ function processFloorPlanTool(
         orientation: w.orientation,
         wall: w.wall,
       }));
+      // Auto-correct window positions to be on room walls
+      windows = windows.map(w => {
+        const room = rooms.find(r => r.id === w.roomId);
+        return room ? snapWindowToWall(w, room) : w;
+      });
 
       const newPlan: FloorPlan = {
         id: generateId(),
