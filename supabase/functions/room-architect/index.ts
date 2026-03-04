@@ -1411,7 +1411,6 @@ serve(async (req) => {
           const MAX_ITERATIONS = 20;
 
           let consecutiveFailures = 0;
-          let lastIssueCount = -1;
 
           for (let i = 0; i < MAX_ITERATIONS; i++) {
             // Send progress event
