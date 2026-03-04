@@ -1422,16 +1422,11 @@ serve(async (req) => {
               })));
             }
 
-            // Graceful fallback: if validation keeps failing with same issues, restart
-            if (isFloorPlanMode && consecutiveFailures >= 5) {
-              console.log("Graceful fallback triggered — resetting floor plan after 5 failed validation attempts");
-              currentFloorPlan = { id: generateId(), name: currentFloorPlan.name, totalWidth: 0, totalHeight: 0, rooms: [], doors: [], windows: [] };
-              consecutiveFailures = 0;
-              lastIssueCount = -1;
-              actionLog.push("🔄 Restarting layout — previous attempt had persistent issues");
-              controller.enqueue(encoder.encode(sseEvent("action", { text: "🔄 Restarting with a simpler layout approach" })));
-              // Inject restart instruction
-              aiMessages.push({ role: "user", content: "The previous layout had persistent issues that couldn't be fixed. Start over with a SIMPLER, more conventional layout. Use a straightforward L-shape or rectangle with a central hallway. Prioritize correctness over creativity." });
+            // Circuit breaker: stop after 3 consecutive failed validations
+            if (isFloorPlanMode && consecutiveFailures >= 3) {
+              console.log("Circuit breaker tripped — 3 consecutive validation failures");
+              finalContent = "I apologize, but I got stuck trying to resolve some architectural conflicts with this specific layout. Could we try starting over with a slightly simpler description?";
+              break;
             }
 
             // Force tool use on first call when no actions taken yet
