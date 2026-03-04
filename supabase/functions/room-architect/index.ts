@@ -131,10 +131,11 @@ const floorPlanTools = [
       description: `Generate a complete floor plan. CRITICAL RULES for room placement:
 1. Rooms MUST share exact wall edges — no gaps between adjacent rooms.
 2. Rooms MUST NOT overlap (except sharing a wall edge at exactly the same coordinate).
-3. For L-shaped or non-rectangular homes, only place rooms where they belong — don't force a rectangular bounding box.
+3. Design CREATIVE, NON-RECTANGULAR layouts. Real houses have L-shapes, T-shapes, bump-outs, and staggered walls. NEVER make a perfect rectangle or grid.
 4. Use a hallway (120-150cm wide) to connect bedrooms and bathrooms.
-5. Place rooms in a grid-like arrangement. Adjacent rooms share edges precisely.
-6. Total dimensions should reflect realistic house sizes (e.g., a 1500sqft house ≈ 14m × 10m).`,
+5. Vary room depths and widths — not all rooms in a row should have the same height.
+6. Total dimensions should reflect realistic house sizes (e.g., a 1500sqft house ≈ 14m × 10m).
+7. Extend some rooms (garage, master suite, living room) beyond the main wall line to create architectural interest.`,
       parameters: {
         type: "object",
         properties: {
