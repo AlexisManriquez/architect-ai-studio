@@ -235,6 +235,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [messages, mode, floorPlan, roomStates, activeRoom]);
 
+  const updateItemPosition = useCallback((roomId: string, itemId: string, x: number, y: number) => {
+    setRoomStates(prev => {
+      const room = prev[roomId];
+      if (!room) return prev;
+      return {
+        ...prev,
+        [roomId]: {
+          ...room,
+          items: room.items.map(item =>
+            item.id === itemId ? { ...item, x: Math.round(x), y: Math.round(y) } : item
+          ),
+        },
+      };
+    });
+  }, []);
+
   return (
     <AppContext.Provider
       value={{
