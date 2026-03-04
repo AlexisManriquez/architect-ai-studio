@@ -1410,6 +1410,9 @@ serve(async (req) => {
           let finalContent = "";
           const MAX_ITERATIONS = 20;
 
+          let consecutiveFailures = 0;
+          let lastIssueCount = -1;
+
           for (let i = 0; i < MAX_ITERATIONS; i++) {
             // Send progress event
             if (i > 0) {
@@ -1417,6 +1420,18 @@ serve(async (req) => {
                 step: i, 
                 actions: actionLog.slice(-3) 
               })));
+            }
+
+            // Graceful fallback: if validation keeps failing with same issues, restart
+            if (isFloorPlanMode && consecutiveFailures >= 5) {
+              console.log("Graceful fallback triggered — resetting floor plan after 5 failed validation attempts");
+              currentFloorPlan = { id: generateId(), name: currentFloorPlan.name, totalWidth: 0, totalHeight: 0, rooms: [], doors: [], windows: [] };
+              consecutiveFailures = 0;
+              lastIssueCount = -1;
+              actionLog.push("🔄 Restarting layout — previous attempt had persistent issues");
+              controller.enqueue(encoder.encode(sseEvent("action", { text: "🔄 Restarting with a simpler layout approach" })));
+              // Inject restart instruction
+              aiMessages.push({ role: "user", content: "The previous layout had persistent issues that couldn't be fixed. Start over with a SIMPLER, more conventional layout. Use a straightforward L-shape or rectangle with a central hallway. Prioritize correctness over creativity." });
             }
 
             // Force tool use on first call when no actions taken yet
