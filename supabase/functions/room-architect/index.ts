@@ -263,6 +263,79 @@ function inspectFloorPlan(floorPlan: FloorPlan): { issues: string[]; suggestions
   const overlapWarnings = validateFloorPlanRooms(rooms);
   issues.push(...overlapWarnings);
 
+  // 9. Dead space detection — find large unused areas inside the bounding box
+  // Use a simple grid-based approach (100cm cells)
+  const CELL = 100; // 1m cells
+  const gridW = Math.ceil(totalWidth / CELL);
+  const gridH = Math.ceil(totalHeight / CELL);
+  if (gridW > 0 && gridH > 0 && gridW < 200 && gridH < 200) {
+    const grid = new Uint8Array(gridW * gridH); // 0 = empty, 1 = occupied
+    for (const room of rooms) {
+      const x1 = Math.floor((room.x - minX) / CELL);
+      const y1 = Math.floor((room.y - minY) / CELL);
+      const x2 = Math.ceil((room.x + room.width - minX) / CELL);
+      const y2 = Math.ceil((room.y + room.height - minY) / CELL);
+      for (let gy = Math.max(0, y1); gy < Math.min(gridH, y2); gy++) {
+        for (let gx = Math.max(0, x1); gx < Math.min(gridW, x2); gx++) {
+          grid[gy * gridW + gx] = 1;
+        }
+      }
+    }
+    // Find connected empty regions using flood fill
+    const visited2 = new Uint8Array(gridW * gridH);
+    const emptyRegions: { cells: number; minX: number; minY: number; maxX: number; maxY: number }[] = [];
+    for (let gy = 0; gy < gridH; gy++) {
+      for (let gx = 0; gx < gridW; gx++) {
+        const idx = gy * gridW + gx;
+        if (grid[idx] === 0 && visited2[idx] === 0) {
+          // Check if this empty cell is on the exterior edge — if so, it's expected (non-rectangular footprint)
+          // Flood fill to find the region
+          let cells = 0;
+          let rMinX = gx, rMinY = gy, rMaxX = gx, rMaxY = gy;
+          let touchesExterior = false;
+          const stack = [{ x: gx, y: gy }];
+          visited2[gy * gridW + gx] = 1;
+          while (stack.length > 0) {
+            const { x, y } = stack.pop()!;
+            cells++;
+            if (x < rMinX) rMinX = x;
+            if (y < rMinY) rMinY = y;
+            if (x > rMaxX) rMaxX = x;
+            if (y > rMaxY) rMaxY = y;
+            // Check if on grid edge (exterior)
+            if (x === 0 || y === 0 || x === gridW - 1 || y === gridH - 1) touchesExterior = true;
+            for (const [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+              const nx = x + dx, ny = y + dy;
+              if (nx >= 0 && nx < gridW && ny >= 0 && ny < gridH) {
+                const ni = ny * gridW + nx;
+                if (grid[ni] === 0 && visited2[ni] === 0) {
+                  visited2[ni] = 1;
+                  stack.push({ x: nx, y: ny });
+                }
+              }
+            }
+          }
+          // Only flag INTERIOR dead spaces (not touching exterior edge) that are significant (>2 sq meters)
+          if (!touchesExterior && cells >= 2) {
+            const areaSqm = cells; // each cell is ~1m²
+            const centerX = Math.round((rMinX + rMaxX) / 2 * CELL + minX);
+            const centerY = Math.round((rMinY + rMaxY) / 2 * CELL + minY);
+            issues.push(`DEAD SPACE: ~${areaSqm}m² of unused interior space near (${centerX}, ${centerY})cm. This is unbuildable — every interior area must be assigned to a room. Either expand adjacent rooms to fill this gap or add a utility room/closet.`);
+          }
+        }
+      }
+    }
+  }
+
+  // 10. Check that small rooms (pantry, closet, laundry) are not creating unbuildable gaps
+  // A room should have at least one wall shared with another room (not floating in space)
+  for (const room of rooms) {
+    const hasSharedWall = rooms.some(r => r.id !== room.id && sharesWall(room, r));
+    if (!hasSharedWall) {
+      issues.push(`FLOATING ROOM: "${room.name}" doesn't share any wall with other rooms. Every room must be physically connected to the house structure.`);
+    }
+  }
+
   return { issues, suggestions };
 }
 
