@@ -122,6 +122,166 @@ function validateFloorPlanRooms(rooms: FloorPlanRoom[]): string[] {
   return warnings;
 }
 
+// ─── Comprehensive Floor Plan Inspector ─────────────────────────────────────
+const PRIVATE_ROOM_TYPES = new Set(["bedroom", "bathroom", "closet", "laundry", "office"]);
+const COMMON_ROOM_TYPES = new Set(["living-room", "kitchen", "dining-room", "hallway", "entry", "garage"]);
+const EXTERIOR_SPACE_TYPES = new Set(["deck", "patio", "porch"]);
+
+function inspectFloorPlan(floorPlan: FloorPlan): { issues: string[]; suggestions: string[] } {
+  const issues: string[] = [];
+  const suggestions: string[] = [];
+  const { rooms, doors } = floorPlan;
+
+  if (rooms.length === 0) return { issues: ["No rooms in floor plan."], suggestions: [] };
+
+  // 1. Build adjacency graph from doors
+  const adjacency: Record<string, Set<string>> = {};
+  for (const r of rooms) adjacency[r.id] = new Set();
+  adjacency["exterior"] = new Set();
+
+  for (const door of doors) {
+    const r1 = door.roomId1, r2 = door.roomId2;
+    if (adjacency[r1]) adjacency[r1].add(r2);
+    if (adjacency[r2]) adjacency[r2].add(r1);
+  }
+
+  // 2. Check connectivity — BFS from entry or any exterior door
+  const entryRooms = rooms.filter(r => r.type === "entry");
+  const roomsWithExteriorDoor = new Set(
+    doors.filter(d => d.roomId1 === "exterior" || d.roomId2 === "exterior")
+      .map(d => d.roomId1 === "exterior" ? d.roomId2 : d.roomId1)
+  );
+  
+  const startNodes = new Set<string>();
+  entryRooms.forEach(r => startNodes.add(r.id));
+  roomsWithExteriorDoor.forEach(id => startNodes.add(id));
+  
+  if (startNodes.size === 0) {
+    issues.push("NO ENTRY POINT: No room has an exterior door and no entry room exists. The house has no way in!");
+  }
+
+  // BFS to find all reachable rooms
+  const visited = new Set<string>();
+  const queue = [...startNodes];
+  queue.forEach(id => visited.add(id));
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const neighbor of (adjacency[current] || [])) {
+      if (neighbor !== "exterior" && !visited.has(neighbor)) {
+        visited.add(neighbor);
+        queue.push(neighbor);
+      }
+    }
+  }
+
+  const unreachable = rooms.filter(r => !visited.has(r.id));
+  for (const r of unreachable) {
+    issues.push(`UNREACHABLE ROOM: "${r.name}" (${r.type}) has no door path to the entry. It is completely disconnected. Add doors to connect it to adjacent rooms.`);
+  }
+
+  // 3. Check bedroom accessibility — no bedroom should only be reachable through another bedroom
+  const bedrooms = rooms.filter(r => r.type === "bedroom");
+  for (const bed of bedrooms) {
+    const neighbors = adjacency[bed.id] || new Set();
+    // If ALL non-exterior neighbors are bedrooms, this is landlocked
+    const nonExteriorNeighbors = [...neighbors].filter(n => n !== "exterior");
+    if (nonExteriorNeighbors.length === 0) {
+      // No doors at all
+      if (!unreachable.find(r => r.id === bed.id)) {
+        issues.push(`ISOLATED BEDROOM: "${bed.name}" has no doors connecting it to any room.`);
+      }
+    } else {
+      const allNeighborsBedrooms = nonExteriorNeighbors.every(nId => {
+        const nRoom = rooms.find(r => r.id === nId);
+        return nRoom && nRoom.type === "bedroom";
+      });
+      if (allNeighborsBedrooms) {
+        issues.push(`LANDLOCKED BEDROOM: "${bed.name}" can only be reached through another bedroom (${nonExteriorNeighbors.map(n => rooms.find(r=>r.id===n)?.name).join(", ")}). It MUST connect to a hallway or common area.`);
+      }
+    }
+  }
+
+  // 4. Check rooms without any doors
+  for (const room of rooms) {
+    const neighborCount = (adjacency[room.id] || new Set()).size;
+    if (neighborCount === 0 && room.type !== "closet") {
+      issues.push(`NO DOORS: "${room.name}" (${room.type}) has zero doors. Every room needs at least one door.`);
+    }
+  }
+
+  // 5. Check exterior spaces are on perimeter
+  const totalWidth = Math.max(...rooms.map(r => r.x + r.width));
+  const totalHeight = Math.max(...rooms.map(r => r.y + r.height));
+  const minX = Math.min(...rooms.map(r => r.x));
+  const minY = Math.min(...rooms.map(r => r.y));
+
+  for (const room of rooms) {
+    // Check if room name suggests it's an exterior space
+    const nameLC = room.name.toLowerCase();
+    const isExterior = nameLC.includes("deck") || nameLC.includes("patio") || nameLC.includes("porch");
+    if (isExterior) {
+      const touchesEdge = room.x <= minX || room.y <= minY ||
+        (room.x + room.width) >= totalWidth || (room.y + room.height) >= totalHeight;
+      if (!touchesEdge) {
+        issues.push(`INTERIOR EXTERIOR SPACE: "${room.name}" is an outdoor space but is surrounded by other rooms. It MUST be on the perimeter of the house with at least one side open to the outside.`);
+      }
+    }
+  }
+
+  // 6. Check garage connectivity
+  const garages = rooms.filter(r => r.type === "garage");
+  for (const garage of garages) {
+    const neighbors = [...(adjacency[garage.id] || [])].filter(n => n !== "exterior");
+    if (neighbors.length === 0) {
+      // Check if there's a hallway or room nearby that SHOULD connect
+      const nearbyRooms = rooms.filter(r => r.id !== garage.id && sharesWall(garage, r));
+      if (nearbyRooms.length > 0) {
+        issues.push(`DISCONNECTED GARAGE: "${garage.name}" shares a wall with ${nearbyRooms.map(r => r.name).join(", ")} but has no door connecting them. Add a door to connect the garage to the house.`);
+      } else {
+        issues.push(`DETACHED GARAGE: "${garage.name}" doesn't share any wall with the house. Move it adjacent to the house or add a connecting hallway.`);
+      }
+    }
+  }
+
+  // 7. Check for rooms that share walls but have no doors (potential missing connections)
+  for (const room of rooms) {
+    if (room.type === "hallway") {
+      const wallSharers = rooms.filter(r => r.id !== room.id && sharesWall(room, r));
+      for (const sharer of wallSharers) {
+        const hasDoor = doors.some(d =>
+          (d.roomId1 === room.id && d.roomId2 === sharer.id) ||
+          (d.roomId1 === sharer.id && d.roomId2 === room.id)
+        );
+        if (!hasDoor && (sharer.type === "bedroom" || sharer.type === "bathroom")) {
+          suggestions.push(`"${sharer.name}" shares a wall with "${room.name}" but has no door. Consider adding a door to connect them.`);
+        }
+      }
+    }
+  }
+
+  // 8. Overlap check
+  const overlapWarnings = validateFloorPlanRooms(rooms);
+  issues.push(...overlapWarnings);
+
+  return { issues, suggestions };
+}
+
+function sharesWall(a: FloorPlanRoom, b: FloorPlanRoom): boolean {
+  // Check if two rooms share a wall edge (touching, not overlapping)
+  const TOLERANCE = 2;
+  // Vertical shared wall (a's right = b's left or vice versa)
+  const verticalShare = (
+    (Math.abs((a.x + a.width) - b.x) < TOLERANCE || Math.abs((b.x + b.width) - a.x) < TOLERANCE) &&
+    Math.max(a.y, b.y) < Math.min(a.y + a.height, b.y + b.height) - TOLERANCE
+  );
+  // Horizontal shared wall (a's bottom = b's top or vice versa)
+  const horizontalShare = (
+    (Math.abs((a.y + a.height) - b.y) < TOLERANCE || Math.abs((b.y + b.height) - a.y) < TOLERANCE) &&
+    Math.max(a.x, b.x) < Math.min(a.x + a.width, b.x + b.width) - TOLERANCE
+  );
+  return verticalShare || horizontalShare;
+}
+
 // ─── Floor Plan Tools ───────────────────────────────────────────────────────
 const floorPlanTools = [
   {
