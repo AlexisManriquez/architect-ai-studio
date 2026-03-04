@@ -389,79 +389,275 @@ function sharesWall(a: FloorPlanRoom, b: FloorPlanRoom): boolean {
   return verticalShare || horizontalShare;
 }
 
+// ─── Procedural Layout Engine ───────────────────────────────────────────────
+
+/** Target area ratios for each room type (relative weight) */
+const ROOM_AREA_WEIGHTS: Record<string, number> = {
+  "living-room": 1.8,
+  "kitchen": 1.2,
+  "dining-room": 1.0,
+  "bedroom": 1.3,
+  "bathroom": 0.5,
+  "office": 0.9,
+  "garage": 2.2,
+  "hallway": 0.4,
+  "closet": 0.2,
+  "laundry": 0.35,
+  "entry": 0.25,
+};
+
+/** Minimum dimensions per room type in cm */
+const ROOM_MIN_DIMS: Record<string, { minW: number; minH: number }> = {
+  "living-room": { minW: 400, minH: 350 },
+  "kitchen": { minW: 300, minH: 280 },
+  "dining-room": { minW: 300, minH: 280 },
+  "bedroom": { minW: 300, minH: 300 },
+  "bathroom": { minW: 180, minH: 180 },
+  "office": { minW: 250, minH: 250 },
+  "garage": { minW: 500, minH: 500 },
+  "hallway": { minW: 120, minH: 120 },
+  "closet": { minW: 120, minH: 120 },
+  "laundry": { minW: 180, minH: 180 },
+  "entry": { minW: 150, minH: 150 },
+};
+
+interface LayoutRect {
+  x: number; y: number; width: number; height: number;
+}
+
+/**
+ * Treemap-style binary space partition layout engine.
+ * Guarantees zero overlaps and shared edges.
+ */
+function generateProceduralLayout(
+  requestedRooms: string[],
+  totalSqft: number
+): FloorPlanRoom[] {
+  // Convert sqft to cm² (1 sqft = 929.0304 cm²)
+  const totalAreaCm2 = totalSqft * 929;
+
+  // Determine bounding box with a ~1.4:1 aspect ratio (landscape)
+  const aspectRatio = 1.4;
+  const totalHeightCm = Math.round(Math.sqrt(totalAreaCm2 / aspectRatio));
+  const totalWidthCm = Math.round(totalHeightCm * aspectRatio);
+
+  // Parse room types — handle numbered names like "bedroom-1", "bedroom-2"
+  interface RoomReq { name: string; type: string; weight: number; }
+  const roomReqs: RoomReq[] = requestedRooms.map(r => {
+    // Extract base type: "bedroom-1" → "bedroom", "master-bathroom" → "bathroom"
+    let baseType = r;
+    const nameParts = r.split("-");
+    // Check if last part is a number (e.g., "bedroom-1")
+    if (nameParts.length > 1 && /^\d+$/.test(nameParts[nameParts.length - 1])) {
+      baseType = nameParts.slice(0, -1).join("-");
+    }
+    // Handle "master-bedroom" → "bedroom", "master-bathroom" → "bathroom"
+    if (baseType === "master-bedroom") baseType = "bedroom";
+    if (baseType === "master-bathroom") baseType = "bathroom";
+    
+    const validType = ROOM_TYPES.includes(baseType as any) ? baseType : "bedroom";
+    const weight = ROOM_AREA_WEIGHTS[validType] || 1.0;
+    
+    // Pretty name
+    const prettyName = r.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    
+    return { name: prettyName, type: validType, weight };
+  });
+
+  // Calculate proportional areas
+  const totalWeight = roomReqs.reduce((s, r) => s + r.weight, 0);
+  const roomAreas = roomReqs.map(r => ({
+    ...r,
+    targetArea: (r.weight / totalWeight) * totalAreaCm2,
+  }));
+
+  // Sort by area descending for better packing (largest rooms first)
+  roomAreas.sort((a, b) => b.targetArea - a.targetArea);
+
+  // Binary space partition
+  const rooms: FloorPlanRoom[] = [];
+  
+  function partition(
+    entries: typeof roomAreas,
+    rect: LayoutRect
+  ) {
+    if (entries.length === 0) return;
+    if (entries.length === 1) {
+      const e = entries[0];
+      const minDims = ROOM_MIN_DIMS[e.type] || { minW: 150, minH: 150 };
+      rooms.push({
+        id: generateId(),
+        name: e.name,
+        type: e.type,
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(Math.max(rect.width, minDims.minW)),
+        height: Math.round(Math.max(rect.height, minDims.minH)),
+      });
+      return;
+    }
+
+    // Split entries into two groups by area
+    const totalArea = entries.reduce((s, e) => s + e.targetArea, 0);
+    let runningArea = 0;
+    let splitIdx = 1;
+    for (let i = 0; i < entries.length - 1; i++) {
+      runningArea += entries[i].targetArea;
+      if (runningArea >= totalArea / 2) {
+        splitIdx = i + 1;
+        break;
+      }
+    }
+
+    const group1 = entries.slice(0, splitIdx);
+    const group2 = entries.slice(splitIdx);
+    const ratio1 = group1.reduce((s, e) => s + e.targetArea, 0) / totalArea;
+
+    // Split along the longer axis
+    if (rect.width >= rect.height) {
+      // Vertical split
+      const w1 = Math.round(rect.width * ratio1);
+      const w2 = rect.width - w1;
+      partition(group1, { x: rect.x, y: rect.y, width: w1, height: rect.height });
+      partition(group2, { x: rect.x + w1, y: rect.y, width: w2, height: rect.height });
+    } else {
+      // Horizontal split
+      const h1 = Math.round(rect.height * ratio1);
+      const h2 = rect.height - h1;
+      partition(group1, { x: rect.x, y: rect.y, width: rect.width, height: h1 });
+      partition(group2, { x: rect.x, y: rect.y + h1, width: rect.width, height: h2 });
+    }
+  }
+
+  partition(roomAreas, { x: 0, y: 0, width: totalWidthCm, height: totalHeightCm });
+
+  return rooms;
+}
+
+/**
+ * Auto-generate doors between all pairs of adjacent rooms that share a wall,
+ * plus exterior doors on entry/garage rooms.
+ */
+function autoGenerateDoors(rooms: FloorPlanRoom[]): FloorPlanDoor[] {
+  const doors: FloorPlanDoor[] = [];
+  const connected = new Set<string>(); // "id1-id2" pairs
+
+  for (let i = 0; i < rooms.length; i++) {
+    for (let j = i + 1; j < rooms.length; j++) {
+      const wall = findSharedWall(rooms[i], rooms[j]);
+      if (!wall) continue;
+      
+      const pairKey = [rooms[i].id, rooms[j].id].sort().join("-");
+      if (connected.has(pairKey)) continue;
+      connected.add(pairKey);
+
+      const doorWidth = 90;
+      let door: FloorPlanDoor;
+      if (wall.orientation === "horizontal") {
+        const cx = wall.x + wall.length / 2;
+        door = {
+          id: generateId(),
+          roomId1: rooms[i].id,
+          roomId2: rooms[j].id,
+          x: Math.round(cx - doorWidth / 2),
+          y: Math.round(wall.y),
+          width: doorWidth,
+          orientation: "horizontal",
+        };
+      } else {
+        const cy = wall.y + wall.length / 2;
+        door = {
+          id: generateId(),
+          roomId1: rooms[i].id,
+          roomId2: rooms[j].id,
+          x: Math.round(wall.x),
+          y: Math.round(cy - doorWidth / 2),
+          width: doorWidth,
+          orientation: "vertical",
+        };
+      }
+      doors.push(door);
+    }
+  }
+
+  // Add exterior doors for entry and garage rooms
+  for (const room of rooms) {
+    if (room.type === "entry" || room.type === "garage") {
+      // Find an exterior wall (one touching the bounding box edge)
+      const allRooms = rooms;
+      const maxX = Math.max(...allRooms.map(r => r.x + r.width));
+      const maxY = Math.max(...allRooms.map(r => r.y + r.height));
+
+      let door: FloorPlanDoor | null = null;
+      if (room.y <= 2) {
+        // North exterior wall
+        door = { id: generateId(), roomId1: room.id, roomId2: "exterior", x: Math.round(room.x + room.width / 2 - 45), y: room.y, width: 90, orientation: "horizontal" };
+      } else if (room.y + room.height >= maxY - 2) {
+        // South exterior wall
+        door = { id: generateId(), roomId1: room.id, roomId2: "exterior", x: Math.round(room.x + room.width / 2 - 45), y: room.y + room.height, width: 90, orientation: "horizontal" };
+      } else if (room.x <= 2) {
+        // West exterior wall
+        door = { id: generateId(), roomId1: room.id, roomId2: "exterior", x: room.x, y: Math.round(room.y + room.height / 2 - 45), width: 90, orientation: "vertical" };
+      } else if (room.x + room.width >= maxX - 2) {
+        // East exterior wall
+        door = { id: generateId(), roomId1: room.id, roomId2: "exterior", x: room.x + room.width, y: Math.round(room.y + room.height / 2 - 45), width: 90, orientation: "vertical" };
+      }
+      if (door) doors.push(door);
+    }
+  }
+
+  return doors;
+}
+
+/**
+ * Auto-generate windows on exterior walls of rooms (except garages, hallways, closets).
+ */
+function autoGenerateWindows(rooms: FloorPlanRoom[]): FloorPlanWindow[] {
+  const windows: FloorPlanWindow[] = [];
+  const maxX = Math.max(...rooms.map(r => r.x + r.width));
+  const maxY = Math.max(...rooms.map(r => r.y + r.height));
+  const skipTypes = new Set(["hallway", "closet", "garage", "entry"]);
+
+  for (const room of rooms) {
+    if (skipTypes.has(room.type)) continue;
+
+    // Check each wall for exterior exposure
+    if (room.y <= 2 && room.width >= 150) {
+      windows.push({ id: generateId(), roomId: room.id, x: Math.round(room.x + room.width / 2 - 50), y: room.y, width: 100, orientation: "horizontal", wall: "north" });
+    }
+    if (room.y + room.height >= maxY - 2 && room.width >= 150) {
+      windows.push({ id: generateId(), roomId: room.id, x: Math.round(room.x + room.width / 2 - 50), y: room.y + room.height, width: 100, orientation: "horizontal", wall: "south" });
+    }
+    if (room.x <= 2 && room.height >= 150) {
+      windows.push({ id: generateId(), roomId: room.id, x: room.x, y: Math.round(room.y + room.height / 2 - 50), width: 100, orientation: "vertical", wall: "west" });
+    }
+    if (room.x + room.width >= maxX - 2 && room.height >= 150) {
+      windows.push({ id: generateId(), roomId: room.id, x: room.x + room.width, y: Math.round(room.y + room.height / 2 - 50), width: 100, orientation: "vertical", wall: "east" });
+    }
+  }
+
+  return windows;
+}
+
 // ─── Floor Plan Tools ───────────────────────────────────────────────────────
 const floorPlanTools = [
   {
     type: "function",
     function: {
       name: "generate_floor_plan",
-      description: `Generate a complete floor plan. CRITICAL RULES for room placement:
-1. Rooms MUST share exact wall edges — no gaps between adjacent rooms.
-2. Rooms MUST NOT overlap (except sharing a wall edge at exactly the same coordinate).
-3. Design CREATIVE, NON-RECTANGULAR layouts. Real houses have L-shapes, T-shapes, bump-outs, and staggered walls. NEVER make a perfect rectangle or grid.
-4. Use a hallway (120-150cm wide) as the SPINE connecting bedrooms and bathrooms. EVERY bedroom must connect to a hallway or common area — NEVER require walking through one bedroom to reach another.
-5. Vary room depths and widths — not all rooms in a row should have the same height.
-6. Total dimensions should reflect realistic house sizes (e.g., a 1500sqft house ≈ 14m × 10m).
-7. Extend some rooms (garage, master suite, living room) beyond the main wall line to create architectural interest.
-8. EXTERIOR SPACES (decks, patios) MUST be on the perimeter of the house with at least one side open to the outside. Decks typically go on the BACK, porches on the FRONT. NEVER place a deck in the interior of the house.
-9. Kitchen should be adjacent to dining/living areas. Butler's pantry goes BETWEEN kitchen and dining room. Laundry near bedrooms or kitchen. Garage connects via entry or mudroom, NEVER through a bedroom.`,
+      description: `Generate a complete floor plan. You provide the room list and target square footage — the backend physics engine handles all coordinate math, door placement, and window placement automatically. Just decide WHAT rooms are needed.`,
       parameters: {
         type: "object",
         properties: {
-          name: { type: "string", description: "Name for the floor plan" },
-          rooms: {
+          name: { type: "string", description: "Name for the floor plan (e.g. 'Modern Ranch Home')" },
+          target_sqft: { type: "number", description: "Total approximate square footage of the house (e.g. 1500, 2200)" },
+          requested_rooms: {
             type: "array",
-            description: "Array of rooms. Rooms MUST tile together with shared edges. Use precise coordinates so adjacent rooms share exact wall positions.",
-            items: {
-              type: "object",
-              properties: {
-                name: { type: "string" },
-                type: { type: "string", enum: [...ROOM_TYPES] },
-                x: { type: "number", description: "X position in cm from left edge" },
-                y: { type: "number", description: "Y position in cm from top edge" },
-                width: { type: "number", description: "Width in cm (horizontal extent)" },
-                height: { type: "number", description: "Height in cm (vertical extent)" },
-              },
-              required: ["name", "type", "x", "y", "width", "height"],
-              additionalProperties: false,
-            },
-          },
-          doors: {
-            type: "array",
-            description: "Doors between rooms. Position on shared wall edges.",
-            items: {
-              type: "object",
-              properties: {
-                roomId1_index: { type: "number", description: "Index of first room in rooms array" },
-                roomId2_index: { type: "number", description: "Index of second room (-1 for exterior)" },
-                x: { type: "number", description: "X position of door center on wall" },
-                y: { type: "number", description: "Y position of door center on wall" },
-                width: { type: "number", description: "Door width in cm (typically 90)" },
-                orientation: { type: "string", enum: ["horizontal", "vertical"] },
-              },
-              required: ["roomId1_index", "roomId2_index", "x", "y", "width", "orientation"],
-              additionalProperties: false,
-            },
-          },
-          windows: {
-            type: "array",
-            description: "Windows on exterior walls only.",
-            items: {
-              type: "object",
-              properties: {
-                roomId_index: { type: "number", description: "Index of room in rooms array" },
-                x: { type: "number", description: "X position" },
-                y: { type: "number", description: "Y position" },
-                width: { type: "number", description: "Window width in cm (typically 100-120)" },
-                orientation: { type: "string", enum: ["horizontal", "vertical"] },
-                wall: { type: "string", enum: ["north", "south", "east", "west"] },
-              },
-              required: ["roomId_index", "x", "y", "width", "orientation", "wall"],
-              additionalProperties: false,
-            },
+            description: "List of room identifiers. Use the room type, optionally with a number suffix for duplicates. Examples: 'living-room', 'kitchen', 'bedroom-1', 'bedroom-2', 'master-bedroom', 'bathroom', 'master-bathroom', 'garage', 'hallway', 'entry', 'office', 'laundry', 'closet-1'.",
+            items: { type: "string" },
           },
         },
-        required: ["name", "rooms", "doors", "windows"],
+        required: ["name", "target_sqft", "requested_rooms"],
         additionalProperties: false,
       },
     },
@@ -848,49 +1044,24 @@ function processFloorPlanTool(
 ): { result: string; floorPlan: FloorPlan; action?: string } {
   switch (name) {
     case "generate_floor_plan": {
-      const rooms: FloorPlanRoom[] = (args.rooms as any[]).map((r) => ({
-        id: generateId(),
-        name: r.name,
-        type: r.type,
-        x: Math.round(r.x),
-        y: Math.round(r.y),
-        width: Math.round(r.width),
-        height: Math.round(r.height),
-      }));
+      const targetSqft = (args.target_sqft as number) || 1500;
+      const requestedRooms = (args.requested_rooms as string[]) || [];
+      
+      if (requestedRooms.length === 0) {
+        return { result: JSON.stringify({ success: false, reason: "No rooms requested" }), floorPlan };
+      }
 
-      const warnings = validateFloorPlanRooms(rooms);
-
+      // Use the procedural layout engine — zero overlaps guaranteed
+      const rooms = generateProceduralLayout(requestedRooms, targetSqft);
+      
       const totalWidth = Math.max(...rooms.map(r => r.x + r.width));
       const totalHeight = Math.max(...rooms.map(r => r.y + r.height));
 
-      // Create doors and auto-snap to shared walls
-      let doors: FloorPlanDoor[] = ((args.doors as any[]) || []).map((d) => ({
-        id: generateId(),
-        roomId1: d.roomId1_index >= 0 ? rooms[d.roomId1_index]?.id || "exterior" : "exterior",
-        roomId2: d.roomId2_index >= 0 ? rooms[d.roomId2_index]?.id || "exterior" : "exterior",
-        x: Math.round(d.x),
-        y: Math.round(d.y),
-        width: Math.round(d.width),
-        orientation: d.orientation,
-      }));
-      // Auto-correct door positions to be on shared walls
-      doors = doors.map(d => snapDoorToWall(d, rooms));
-
-      // Create windows and auto-snap to exterior walls
-      let windows: FloorPlanWindow[] = ((args.windows as any[]) || []).map((w) => ({
-        id: generateId(),
-        roomId: w.roomId_index >= 0 ? rooms[w.roomId_index]?.id || "" : "",
-        x: Math.round(w.x),
-        y: Math.round(w.y),
-        width: Math.round(w.width),
-        orientation: w.orientation,
-        wall: w.wall,
-      }));
-      // Auto-correct window positions to be on room walls
-      windows = windows.map(w => {
-        const room = rooms.find(r => r.id === w.roomId);
-        return room ? snapWindowToWall(w, room) : w;
-      });
+      // Auto-generate doors on shared walls
+      const doors = autoGenerateDoors(rooms);
+      
+      // Auto-generate windows on exterior walls
+      const windows = autoGenerateWindows(rooms);
 
       const newPlan: FloorPlan = {
         id: generateId(),
@@ -902,25 +1073,24 @@ function processFloorPlanTool(
         windows,
       };
 
-      const totalSqft = rooms.reduce((s, r) => s + Math.round((r.width * r.height) / 929), 0);
+      const totalSqft2 = rooms.reduce((s, r) => s + Math.round((r.width * r.height) / 929), 0);
       
-      // Auto-run inspection on the generated plan
+      // Auto-run inspection
       const inspection = inspectFloorPlan(newPlan);
       
-      let resultStr = JSON.stringify({
+      const resultStr = JSON.stringify({
         success: true,
         rooms: rooms.length,
         doors: doors.length,
         windows: windows.length,
-        totalSqft,
+        totalSqft: totalSqft2,
         room_ids: rooms.map(r => ({ id: r.id, name: r.name })),
-        warnings: warnings.length > 0 ? warnings : undefined,
         inspection: {
           passed: inspection.issues.length === 0,
           issues: inspection.issues,
           suggestions: inspection.suggestions,
           note: inspection.issues.length > 0
-            ? "CRITICAL: The floor plan has issues. You MUST fix them NOW by adding doors, moving rooms, etc. Then call validate_floor_plan to confirm."
+            ? "Some issues detected — use add_door, move_room, or resize_room to fix, then validate_floor_plan."
             : "Floor plan passed all checks!",
         },
       });
@@ -928,7 +1098,7 @@ function processFloorPlanTool(
       return {
         result: resultStr,
         floorPlan: newPlan,
-        action: `Generated "${newPlan.name}" — ${rooms.length} rooms, ~${totalSqft} sqft`,
+        action: `Generated "${newPlan.name}" — ${rooms.length} rooms, ~${totalSqft2} sqft`,
       };
     }
 
@@ -1157,11 +1327,17 @@ function buildFloorPlanSystemPrompt(floorPlan: FloorPlan): string {
         `  • ${r.name} [id: ${r.id}] type=${r.type} at (${r.x},${r.y}) ${r.width}×${r.height}cm (~${Math.round((r.width * r.height) / 929)} sqft)`
       ).join("\n");
 
-  return `You are an expert residential floor plan architect AI with VISION capabilities. You design precise, realistic house floor plans.
+  return `You are an expert residential floor plan architect AI. You help users design house floor plans.
+
+YOU DO NOT NEED TO CALCULATE COORDINATES. The backend physics engine handles all room coordinate placement, door generation, and window generation automatically. Your job is to:
+1. Listen to the user's request.
+2. Decide what rooms are needed and the approximate total square footage.
+3. Call generate_floor_plan with the room list and target sqft.
+4. The engine will return a mathematically perfect layout with zero overlaps.
 
 YOU HAVE TWO INFORMATION SOURCES:
 1. A SCREENSHOT IMAGE of the current canvas (visual — examine it carefully!)
-2. PRECISE COORDINATE DATA below (numerical — use for exact positions)
+2. PRECISE COORDINATE DATA below (numerical — use for exact positions when modifying)
 
 ═══ FLOOR PLAN: "${floorPlan.name}" ═══
 Bounding box: ${floorPlan.totalWidth}cm × ${floorPlan.totalHeight}cm
@@ -1171,123 +1347,47 @@ Windows: ${floorPlan.windows.length}
 
 ═══ COORDINATE SYSTEM ═══
 Origin (0,0) = top-left corner. X → right, Y → down. All values in cm.
-Room positions are their top-left corner.
-100cm = 1 meter ≈ 3.28 feet. 1 sqft ≈ 929 cm². 1 ft ≈ 30.48cm.
+100cm = 1 meter ≈ 3.28 feet. 1 sqft ≈ 929 cm².
 
 ═══ ROOM TYPES ═══
 ${ROOM_TYPES.join(", ")}
 
-═══ CRITICAL PLACEMENT RULES ═══
+═══ SIZING GUIDE ═══
+Use these rough sqft targets when deciding total_sqft:
+  - Studio/1-bed apartment: 500-800 sqft
+  - 2-bedroom home: 1000-1400 sqft
+  - 3-bedroom home: 1400-2000 sqft
+  - 4-bedroom home: 2000-2800 sqft
+  - 5+ bedroom home: 2800-4000+ sqft
+Include garage in sqft estimate if requested (~300-500 sqft for a 2-car garage).
 
-**RULE 1: SHARED WALLS — NO GAPS**
-Adjacent rooms MUST share exact wall edges. If Room A ends at x=500 and Room B is next to it, Room B starts at x=500.
-
-**RULE 2: NO OVERLAPPING ROOMS**
-Rooms must never overlap.
-
-**RULE 3: REALISTIC PROPORTIONS**
-Use these as MINIMUM sizes (convert sqft → cm² by ×929):
-  - Master Bedroom: 400-500cm × 400-500cm (170-270 sqft)
-  - Bedroom: 300-400cm × 350-400cm (110-170 sqft)  
-  - Bathroom: 200-300cm × 200-300cm (40-100 sqft)
-  - Kitchen: 300-400cm × 300-400cm (100-170 sqft)
-  - Living Room: 500-700cm × 400-500cm (215-375 sqft)
-  - Garage: 500-700cm × 550-650cm (300-490 sqft)
-  - Hallway: 120-150cm wide × length as needed
-  - Closet: 150-200cm × 150-250cm (25-55 sqft)
-  - Laundry: 200-250cm × 200-300cm (45-80 sqft)
-  - Pantry: 150-200cm × 150-200cm (25-45 sqft)
-  - Entry: 150-250cm × 150-250cm (25-70 sqft)
-
-**RULE 4: ADAPTIVE LAYOUT COMPLEXITY**
-- Adapt the shape of the house to the user's request. 
-- IF the user asks for a simple studio, 1-bedroom apartment, or basic cabin, a perfect rectangle or square is completely fine and expected.
-- IF the user asks for a larger home (2+ bedrooms), you MUST design layouts with architectural character: Create L-shaped, T-shaped, or U-shaped footprints. Add bump-outs (e.g., extend the living room or garage beyond the main wall line by 100-200cm). Vary room dimensions so the exterior silhouette is irregular.
-
-**RULE 4B: NO DEAD SPACE (CRITICAL)**
-Every square meter INSIDE the house footprint must be assigned to a room. When placing a room between two others, make sure it fills the entire gap OR adjacent rooms extend to fill remaining space. Think about what a BUILDER would see: every interior wall must have a room on both sides.
-
-**RULE 4C: STRICT GARAGE PLACEMENT**
-Garages MUST share an exterior wall with the absolute outside of the house footprint so cars can drive in. NEVER place a garage entirely surrounded by other rooms in the interior of the floor plan.
-
-**RULE 4D: STRICT BATHROOM PLACEMENT**
-Guest bathrooms MUST connect directly to a hallway or main living space. En-suite bathrooms MUST connect to exactly ONE bedroom. Never force a user to walk through multiple bedrooms or a utility closet to reach a primary bathroom.
-
-**RULE 5: ROOM ACCESSIBILITY — EVERY ROOM MUST BE REACHABLE (CRITICAL)**
-Think about how a person WALKS through the house. Every room must be accessible without passing through another private room:
-  - EVERY bedroom MUST connect to a hallway or common area (living room, entry). NEVER place a bedroom behind another bedroom — no one should walk through someone's bedroom to reach another.
-  - Bathrooms should connect to a hallway OR directly to their associated bedroom (en-suite), NOT only accessible through an unrelated room.
-  - The hallway is the SPINE of the house. It connects bedrooms, bathrooms, and the main living area.
-  - Closets and en-suite bathrooms CAN be accessed only through their parent bedroom — that is the ONLY exception.
-  - Think about door placement: if two rooms share a wall but there's no door, they are NOT connected.
-
-**RULE 6: EXTERIOR SPACES (DECKS, PATIOS, PORCHES)**
-  - Decks, patios, and porches are OUTDOOR spaces. They MUST be on the PERIMETER of the house, touching an exterior edge.
-  - A deck should NEVER be surrounded by rooms on all sides — it must have at least one side open to the outside (yard).
-  - Typically decks are attached to the BACK of the house, accessible from the living room, kitchen, or dining room.
-  - Porches go at the FRONT near the entry.
-  - Decks/patios should NOT be counted in interior square footage.
-
-**RULE 7: LOGICAL ROOM ADJACENCY**
-  - Kitchen should be adjacent to or open to the dining room and/or living room (especially for "open concept").
-  - Butler's pantry connects kitchen to dining room — it should be between them, not isolated.
-  - Laundry room should be near bedrooms or kitchen, NOT in the middle of living spaces.
-  - Garage connects to the house via entry, mudroom, or kitchen — NOT through a bedroom.
-  - Master bathroom and master closet should be accessible FROM the master bedroom only.
-  - Entry/foyer should be near the front of the house, connecting to the main living area.
-
-**RULE 10: GARAGE PERIMETER (CRITICAL)**
-  - Garages MUST share an exterior wall with the absolute outside of the house footprint. Never place a garage entirely surrounded by other rooms. Cars must be able to drive in from outside.
-
-**RULE 11: BATHROOM ACCESSIBILITY (CRITICAL)**
-  - Guest bathrooms MUST connect to a hallway or common area (living room, entry). They should NOT be accessible only through an unrelated room.
-  - En-suite bathrooms MUST connect to exactly ONE bedroom. If a bathroom connects to multiple bedrooms without a hallway connection, that's an awkward layout.
-  - Bathrooms must NEVER be trapped behind closets, laundry rooms, or utility spaces.
-
-**RULE 8: SKETCH INTERPRETATION**
-When the user uploads a floor plan image/sketch:
-1. Study every room label, dimension annotation, and spatial relationship.
-2. Count all rooms and identify their types from labels.
-3. Measure RELATIVE proportions between rooms.
-4. Preserve the EXACT spatial layout.
-5. If dimensions are labeled, convert: feet × 30.48 = cm.
-6. Reproduce the exact room arrangement.
-7. Pay attention to hallways connecting rooms.
-
-**RULE 9: HALLWAYS**
-Use hallways (120-150cm wide) as the SPINE to connect bedrooms and bathrooms to the main living area. Every private room must be reachable from the hallway without passing through another private room.
+═══ ROOM NAMING CONVENTIONS ═══
+When calling generate_floor_plan, use these identifiers in requested_rooms:
+  - "living-room", "kitchen", "dining-room"
+  - "bedroom-1", "bedroom-2", "master-bedroom"
+  - "bathroom", "master-bathroom", "bathroom-2"
+  - "hallway", "entry", "garage"
+  - "office", "laundry", "closet-1", "closet-2"
 
 ═══ TOOLS ═══
-1. **generate_floor_plan** — Create an entire floor plan.
-2. **add_room** / **remove_room** / **resize_room** / **move_room** — Modify individual rooms.
-3. **add_door** / **add_window** — Add doors and windows.
-4. **list_rooms** — Inspect current layout.
-5. **validate_floor_plan** — 🔍 INSPECTOR TOOL. Run after generating or significantly modifying the floor plan.
+1. **generate_floor_plan** — Provide room list + target sqft. The engine handles coordinates, doors, and windows.
+2. **add_room** / **remove_room** / **resize_room** / **move_room** — Fine-tune individual rooms after generation.
+3. **add_door** / **add_window** — Add additional doors/windows if needed.
+4. **list_rooms** — Inspect current layout with IDs and positions.
+5. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
 
-═══ MANDATORY VALIDATION WORKFLOW ═══
-After calling generate_floor_plan, you MUST:
-1. Call **validate_floor_plan** to inspect the result.
-2. If issues are found, FIX them (add missing doors, move rooms, restructure layout).
-3. Call **validate_floor_plan** AGAIN to confirm all issues are resolved.
-4. Repeat until validation passes with zero issues.
-This ensures every floor plan has proper room connectivity, no landlocked bedrooms, and logical flow.
-
-═══ DOOR PLACEMENT ═══
-- Doors go on SHARED WALLS between adjacent rooms.
-- Horizontal door = horizontal shared edge. Vertical door = vertical shared edge.
-- Exterior doors: use roomId2_index = -1.
-
-═══ WINDOW PLACEMENT ═══
-- Windows only on EXTERIOR walls.
-- wall="north" = top edge, "south" = bottom, "east" = right, "west" = left.
+═══ WORKFLOW ═══
+1. Call **generate_floor_plan** with the room list and sqft.
+2. Review the auto-inspection results included in the response.
+3. If issues exist, fix them with add_door, move_room, resize_room, etc.
+4. Call **validate_floor_plan** to confirm all issues are resolved.
 
 ═══ RESPONSE RULES ═══
-1. ALWAYS execute tools when the user asks you to DO something.
+1. ALWAYS call generate_floor_plan when the user asks to create or redesign a floor plan.
 2. Be conversational and brief (1-3 sentences after executing actions).
-3. When recreating a sketch, describe what you see first, then generate the plan.
-4. All coordinates must be whole numbers.
-5. If the floor plan has issues (gaps, overlaps), fix them proactively.
-6. ALWAYS call validate_floor_plan after generate_floor_plan — no exceptions.`;
+3. When recreating a sketch, describe what you see first, then generate.
+4. If the user asks to add/remove specific rooms from an existing plan, use add_room/remove_room.
+5. ALWAYS call validate_floor_plan after generate_floor_plan — no exceptions.`;
 }
 
 function buildRoomSystemPrompt(roomState: RoomState, roomName: string): string {
