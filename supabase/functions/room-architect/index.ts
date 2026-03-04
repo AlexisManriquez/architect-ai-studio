@@ -812,8 +812,8 @@ When the user uploads a floor plan image/sketch:
 6. Reproduce the exact room arrangement.
 7. Pay attention to hallways connecting rooms.
 
-**RULE 6: HALLWAYS**
-Use hallways (120-150cm wide) to connect bedrooms and bathrooms.
+**RULE 9: HALLWAYS**
+Use hallways (120-150cm wide) as the SPINE to connect bedrooms and bathrooms to the main living area. Every private room must be reachable from the hallway without passing through another private room.
 
 ═══ TOOLS ═══
 1. **generate_floor_plan** — Create an entire floor plan.
