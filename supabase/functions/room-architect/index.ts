@@ -428,18 +428,31 @@ interface LayoutRect {
 // ─── Room Requirement Parser ────────────────────────────────────────────────
 interface RoomReq { name: string; type: string; weight: number; }
 
-function parseRoomRequirements(requestedRooms: string[]): RoomReq[] {
+interface RoomRequestInput { type: string; size?: "small" | "normal" | "large"; }
+
+const SIZE_MULTIPLIERS: Record<string, number> = {
+  small: 0.6,
+  normal: 1.0,
+  large: 1.6,
+};
+
+function parseRoomRequirements(requestedRooms: (string | RoomRequestInput)[]): RoomReq[] {
   return requestedRooms.map(r => {
-    let baseType = r;
-    const nameParts = r.split("-");
+    const roomType = typeof r === "string" ? r : r.type;
+    const size = typeof r === "string" ? "normal" : (r.size || "normal");
+    
+    let baseType = roomType;
+    const nameParts = roomType.split("-");
     if (nameParts.length > 1 && /^\d+$/.test(nameParts[nameParts.length - 1])) {
       baseType = nameParts.slice(0, -1).join("-");
     }
     if (baseType === "master-bedroom") baseType = "bedroom";
     if (baseType === "master-bathroom") baseType = "bathroom";
     const validType = ROOM_TYPES.includes(baseType as any) ? baseType : "bedroom";
-    const weight = ROOM_AREA_WEIGHTS[validType] || 1.0;
-    const prettyName = r.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    const baseWeight = ROOM_AREA_WEIGHTS[validType] || 1.0;
+    const sizeMultiplier = SIZE_MULTIPLIERS[size] || 1.0;
+    const weight = baseWeight * sizeMultiplier;
+    const prettyName = roomType.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
     return { name: prettyName, type: validType, weight };
   });
 }
@@ -743,7 +756,7 @@ const PUBLIC_TYPES = new Set(["living-room", "kitchen", "dining-room", "office",
  * 4. Guarantees zero overlaps and shared edges.
  */
 function generateProceduralLayout(
-  requestedRooms: string[],
+  requestedRooms: (string | RoomRequestInput)[],
   totalSqft: number
 ): FloorPlanRoom[] {
   const totalAreaCm2 = totalSqft * 929;
@@ -991,8 +1004,15 @@ const floorPlanTools = [
           target_sqft: { type: "number", description: "Total approximate square footage of the house (e.g. 1500, 2200)" },
           requested_rooms: {
             type: "array",
-            description: "List of room identifiers. Use the room type, optionally with a number suffix for duplicates. Examples: 'living-room', 'kitchen', 'bedroom-1', 'bedroom-2', 'master-bedroom', 'bathroom', 'master-bathroom', 'garage', 'hallway', 'entry', 'office', 'laundry', 'closet-1'.",
-            items: { type: "string" },
+            description: "List of rooms to include. Each entry is an object with 'type' (room identifier like 'living-room', 'bedroom-1', 'master-bedroom', 'kitchen', 'garage', etc.) and optional 'size' ('small', 'normal', or 'large'). Use 'size' when the user explicitly asks for a bigger or smaller room. Default is 'normal'.",
+            items: {
+              type: "object",
+              properties: {
+                type: { type: "string", description: "Room identifier, e.g. 'living-room', 'bedroom-1', 'master-bedroom', 'bathroom', 'garage', 'kitchen'" },
+                size: { type: "string", enum: ["small", "normal", "large"], description: "Room size modifier. 'small' = 60% of base area, 'normal' = 100%, 'large' = 160%. Default 'normal'." },
+              },
+              required: ["type"],
+            },
           },
         },
         required: ["name", "target_sqft", "requested_rooms"],
@@ -1383,7 +1403,7 @@ function processFloorPlanTool(
   switch (name) {
     case "generate_floor_plan": {
       const targetSqft = (args.target_sqft as number) || 1500;
-      const requestedRooms = (args.requested_rooms as string[]) || [];
+      const requestedRooms = (args.requested_rooms as (string | RoomRequestInput)[]) || [];
       
       if (requestedRooms.length === 0) {
         return { result: JSON.stringify({ success: false, reason: "No rooms requested" }), floorPlan };
@@ -1700,22 +1720,32 @@ Use these rough sqft targets when deciding total_sqft:
 Include garage in sqft estimate if requested (~300-500 sqft for a 2-car garage).
 
 ═══ ROOM NAMING CONVENTIONS ═══
-When calling generate_floor_plan, use these identifiers in requested_rooms:
-  - "living-room", "kitchen", "dining-room"
-  - "bedroom-1", "bedroom-2", "master-bedroom"
-  - "bathroom", "master-bathroom", "bathroom-2"
-  - "hallway", "entry", "garage"
-  - "office", "laundry", "closet-1", "closet-2"
+When calling generate_floor_plan, use these room objects in requested_rooms:
+  - { "type": "living-room" }, { "type": "kitchen" }, { "type": "dining-room" }
+  - { "type": "bedroom-1" }, { "type": "bedroom-2" }, { "type": "master-bedroom" }
+  - { "type": "bathroom" }, { "type": "master-bathroom" }, { "type": "bathroom-2" }
+  - { "type": "hallway" }, { "type": "entry" }, { "type": "garage" }
+  - { "type": "office" }, { "type": "laundry" }, { "type": "closet-1" }
+
+═══ ROOM SIZING ═══
+Each room object accepts an optional "size" field: "small", "normal", or "large".
+  - "small" = 60% of the default area for that room type
+  - "normal" = default (you can omit the size field)
+  - "large" = 160% of the default area for that room type
+Use the "size" parameter when the user explicitly asks for a bigger or smaller specific room.
+Example: User says "I want a large master bedroom and a small office" →
+  { "type": "master-bedroom", "size": "large" }, { "type": "office", "size": "small" }
+Do NOT use the resize_room tool afterwards if you can express the size intent upfront in generate_floor_plan.
 
 ═══ TOOLS ═══
-1. **generate_floor_plan** — Provide room list + target sqft. The engine handles coordinates, doors, and windows.
+1. **generate_floor_plan** — Provide room list (with optional sizes) + target sqft. The engine handles coordinates, doors, and windows.
 2. **add_room** / **remove_room** / **resize_room** / **move_room** — Fine-tune individual rooms after generation.
 3. **add_door** / **add_window** — Add additional doors/windows if needed.
 4. **list_rooms** — Inspect current layout with IDs and positions.
 5. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
 
 ═══ WORKFLOW ═══
-1. Call **generate_floor_plan** with the room list and sqft.
+1. Call **generate_floor_plan** with the room list (including size preferences) and sqft.
 2. Review the auto-inspection results included in the response.
 3. If issues exist, fix them with add_door, move_room, resize_room, etc.
 4. Call **validate_floor_plan** to confirm all issues are resolved.
@@ -1725,7 +1755,8 @@ When calling generate_floor_plan, use these identifiers in requested_rooms:
 2. Be conversational and brief (1-3 sentences after executing actions).
 3. When recreating a sketch, describe what you see first, then generate.
 4. If the user asks to add/remove specific rooms from an existing plan, use add_room/remove_room.
-5. ALWAYS call validate_floor_plan after generate_floor_plan — no exceptions.`;
+5. ALWAYS call validate_floor_plan after generate_floor_plan — no exceptions.
+6. When a user mentions wanting a "large" or "small" room, use the size parameter in generate_floor_plan rather than calling resize_room after.`;
 }
 
 function buildRoomSystemPrompt(roomState: RoomState, roomName: string): string {
