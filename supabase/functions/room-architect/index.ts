@@ -80,6 +80,7 @@ interface FloorPlanDoor {
   y: number;
   width: number;
   orientation: "horizontal" | "vertical";
+  isOpening?: boolean;
 }
 
 interface FloorPlanWindow {
