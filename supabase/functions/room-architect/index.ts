@@ -428,18 +428,31 @@ interface LayoutRect {
 // ─── Room Requirement Parser ────────────────────────────────────────────────
 interface RoomReq { name: string; type: string; weight: number; }
 
-function parseRoomRequirements(requestedRooms: string[]): RoomReq[] {
+interface RoomRequestInput { type: string; size?: "small" | "normal" | "large"; }
+
+const SIZE_MULTIPLIERS: Record<string, number> = {
+  small: 0.6,
+  normal: 1.0,
+  large: 1.6,
+};
+
+function parseRoomRequirements(requestedRooms: (string | RoomRequestInput)[]): RoomReq[] {
   return requestedRooms.map(r => {
-    let baseType = r;
-    const nameParts = r.split("-");
+    const roomType = typeof r === "string" ? r : r.type;
+    const size = typeof r === "string" ? "normal" : (r.size || "normal");
+    
+    let baseType = roomType;
+    const nameParts = roomType.split("-");
     if (nameParts.length > 1 && /^\d+$/.test(nameParts[nameParts.length - 1])) {
       baseType = nameParts.slice(0, -1).join("-");
     }
     if (baseType === "master-bedroom") baseType = "bedroom";
     if (baseType === "master-bathroom") baseType = "bathroom";
     const validType = ROOM_TYPES.includes(baseType as any) ? baseType : "bedroom";
-    const weight = ROOM_AREA_WEIGHTS[validType] || 1.0;
-    const prettyName = r.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    const baseWeight = ROOM_AREA_WEIGHTS[validType] || 1.0;
+    const sizeMultiplier = SIZE_MULTIPLIERS[size] || 1.0;
+    const weight = baseWeight * sizeMultiplier;
+    const prettyName = roomType.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
     return { name: prettyName, type: validType, weight };
   });
 }
