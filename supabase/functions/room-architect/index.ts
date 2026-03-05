@@ -1403,7 +1403,7 @@ function processFloorPlanTool(
   switch (name) {
     case "generate_floor_plan": {
       const targetSqft = (args.target_sqft as number) || 1500;
-      const requestedRooms = (args.requested_rooms as string[]) || [];
+      const requestedRooms = (args.requested_rooms as (string | RoomRequestInput)[]) || [];
       
       if (requestedRooms.length === 0) {
         return { result: JSON.stringify({ success: false, reason: "No rooms requested" }), floorPlan };
