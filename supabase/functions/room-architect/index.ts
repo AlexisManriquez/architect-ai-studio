@@ -1720,22 +1720,32 @@ Use these rough sqft targets when deciding total_sqft:
 Include garage in sqft estimate if requested (~300-500 sqft for a 2-car garage).
 
 ═══ ROOM NAMING CONVENTIONS ═══
-When calling generate_floor_plan, use these identifiers in requested_rooms:
-  - "living-room", "kitchen", "dining-room"
-  - "bedroom-1", "bedroom-2", "master-bedroom"
-  - "bathroom", "master-bathroom", "bathroom-2"
-  - "hallway", "entry", "garage"
-  - "office", "laundry", "closet-1", "closet-2"
+When calling generate_floor_plan, use these room objects in requested_rooms:
+  - { "type": "living-room" }, { "type": "kitchen" }, { "type": "dining-room" }
+  - { "type": "bedroom-1" }, { "type": "bedroom-2" }, { "type": "master-bedroom" }
+  - { "type": "bathroom" }, { "type": "master-bathroom" }, { "type": "bathroom-2" }
+  - { "type": "hallway" }, { "type": "entry" }, { "type": "garage" }
+  - { "type": "office" }, { "type": "laundry" }, { "type": "closet-1" }
+
+═══ ROOM SIZING ═══
+Each room object accepts an optional "size" field: "small", "normal", or "large".
+  - "small" = 60% of the default area for that room type
+  - "normal" = default (you can omit the size field)
+  - "large" = 160% of the default area for that room type
+Use the "size" parameter when the user explicitly asks for a bigger or smaller specific room.
+Example: User says "I want a large master bedroom and a small office" →
+  { "type": "master-bedroom", "size": "large" }, { "type": "office", "size": "small" }
+Do NOT use the resize_room tool afterwards if you can express the size intent upfront in generate_floor_plan.
 
 ═══ TOOLS ═══
-1. **generate_floor_plan** — Provide room list + target sqft. The engine handles coordinates, doors, and windows.
+1. **generate_floor_plan** — Provide room list (with optional sizes) + target sqft. The engine handles coordinates, doors, and windows.
 2. **add_room** / **remove_room** / **resize_room** / **move_room** — Fine-tune individual rooms after generation.
 3. **add_door** / **add_window** — Add additional doors/windows if needed.
 4. **list_rooms** — Inspect current layout with IDs and positions.
 5. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
 
 ═══ WORKFLOW ═══
-1. Call **generate_floor_plan** with the room list and sqft.
+1. Call **generate_floor_plan** with the room list (including size preferences) and sqft.
 2. Review the auto-inspection results included in the response.
 3. If issues exist, fix them with add_door, move_room, resize_room, etc.
 4. Call **validate_floor_plan** to confirm all issues are resolved.
@@ -1745,7 +1755,8 @@ When calling generate_floor_plan, use these identifiers in requested_rooms:
 2. Be conversational and brief (1-3 sentences after executing actions).
 3. When recreating a sketch, describe what you see first, then generate.
 4. If the user asks to add/remove specific rooms from an existing plan, use add_room/remove_room.
-5. ALWAYS call validate_floor_plan after generate_floor_plan — no exceptions.`;
+5. ALWAYS call validate_floor_plan after generate_floor_plan — no exceptions.
+6. When a user mentions wanting a "large" or "small" room, use the size parameter in generate_floor_plan rather than calling resize_room after.`;
 }
 
 function buildRoomSystemPrompt(roomState: RoomState, roomName: string): string {
