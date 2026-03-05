@@ -1004,8 +1004,15 @@ const floorPlanTools = [
           target_sqft: { type: "number", description: "Total approximate square footage of the house (e.g. 1500, 2200)" },
           requested_rooms: {
             type: "array",
-            description: "List of room identifiers. Use the room type, optionally with a number suffix for duplicates. Examples: 'living-room', 'kitchen', 'bedroom-1', 'bedroom-2', 'master-bedroom', 'bathroom', 'master-bathroom', 'garage', 'hallway', 'entry', 'office', 'laundry', 'closet-1'.",
-            items: { type: "string" },
+            description: "List of rooms to include. Each entry is an object with 'type' (room identifier like 'living-room', 'bedroom-1', 'master-bedroom', 'kitchen', 'garage', etc.) and optional 'size' ('small', 'normal', or 'large'). Use 'size' when the user explicitly asks for a bigger or smaller room. Default is 'normal'.",
+            items: {
+              type: "object",
+              properties: {
+                type: { type: "string", description: "Room identifier, e.g. 'living-room', 'bedroom-1', 'master-bedroom', 'bathroom', 'garage', 'kitchen'" },
+                size: { type: "string", enum: ["small", "normal", "large"], description: "Room size modifier. 'small' = 60% of base area, 'normal' = 100%, 'large' = 160%. Default 'normal'." },
+              },
+              required: ["type"],
+            },
           },
         },
         required: ["name", "target_sqft", "requested_rooms"],
