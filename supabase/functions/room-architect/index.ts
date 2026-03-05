@@ -1508,8 +1508,20 @@ function processFloorPlanTool(
         return { result: JSON.stringify({ success: false, reason: "No rooms provided" }), floorPlan };
       }
 
+      // Deduplicate rooms by name — keep only the first occurrence
+      const seenNames = new Set<string>();
+      const uniqueSketchRooms = sketchRooms.filter(r => {
+        const key = r.name.toLowerCase().trim();
+        if (seenNames.has(key)) {
+          console.warn(`Duplicate room name filtered: "${r.name}"`);
+          return false;
+        }
+        seenNames.add(key);
+        return true;
+      });
+
       // Validate and normalize room types
-      const rooms: FloorPlanRoom[] = sketchRooms.map(r => {
+      const rooms: FloorPlanRoom[] = uniqueSketchRooms.map(r => {
         let baseType = r.type;
         const nameParts = baseType.split("-");
         if (nameParts.length > 1 && /^\d+$/.test(nameParts[nameParts.length - 1])) {
@@ -1872,18 +1884,36 @@ Do NOT use the resize_room tool afterwards if you can express the size intent up
 ═══ SKETCH / IMAGE UPLOAD ═══
 When the user uploads a floor plan image, sketch, or blueprint:
 1. Use **generate_from_sketch** — NOT generate_floor_plan.
-2. Carefully analyze the image: identify every room, estimate its proportional size, and determine its spatial position relative to other rooms.
-3. Convert the image into cm coordinates. Use the image proportions to set total_width and total_height (e.g., a roughly 80ft × 60ft house = 2440cm × 1830cm).
-4. Place rooms so they share edges perfectly (no gaps, no overlaps). Rooms that are side-by-side must have matching coordinates.
-5. Include ALL rooms visible in the image — closets, hallways, porches, garages, pantries, etc.
+2. STEP 1 — INVENTORY: Before generating coordinates, list EVERY room you see in the image. Count them carefully.
+   - Each room must have a UNIQUE name. Never create two rooms with the same name.
+   - If the image shows "Bed 2", "Bed 3", "Bed 4" — those are THREE separate bedrooms, not duplicates.
+   - If there are multiple bathrooms, give each a unique name: "Master Bath", "Bathroom 2", "Bath 3", etc.
+3. STEP 2 — OVERALL SHAPE: Determine the house footprint shape.
+   - Is it wide/horizontal or tall/vertical?
+   - Is it rectangular, L-shaped, T-shaped, U-shaped?
+   - The generated layout MUST match this overall shape.
+4. STEP 3 — SPATIAL GRID: Mentally divide the image into a grid.
+   - If the house is ~90ft wide × ~65ft deep, that's ~2740cm × ~1980cm.
+   - Estimate each room's position as a fraction of total width/height.
+   - A room at the far right occupies x ≈ 70-100% of total width.
+   - A room at the top occupies y ≈ 0-30% of total height.
+5. STEP 4 — COORDINATES: Convert to cm. Rooms that are side-by-side MUST share exact edges.
+   - If Room A ends at x=1200 and Room B is to its right, Room B starts at x=1200.
+   - NO GAPS between adjacent rooms. NO OVERLAPS.
 6. After calling generate_from_sketch, ALWAYS call validate_floor_plan.
 
-ESTIMATION TIPS for sketches:
-- Divide the image into a grid. If the house is ~80ft wide and a room takes up ~25% of the width, that room is ~20ft = ~610cm wide.
-- Standard room heights: bedrooms 10-14ft, bathrooms 6-10ft, kitchens 12-16ft, hallways 4-5ft wide, closets 4-6ft.
-- Garages are typically 20-26ft × 20-24ft.
-- Porches/decks are typically 6-13ft deep.
-- Rooms in the image that are adjacent MUST share an exact edge in your coordinates.
+CRITICAL RULES FOR SKETCHES:
+- NEVER duplicate room names. Every room name must be unique.
+- Match the OVERALL SHAPE of the reference image (wide house = wide layout, NOT a tall column of rooms).
+- Bedrooms on the right side of the image → place at high x values.
+- Rooms on the left side → low x values.
+- The spatial arrangement is MORE important than exact sizes.
+
+ESTIMATION TIPS:
+- Standard room dimensions: bedrooms 12-16ft, bathrooms 7-10ft, kitchens 12-20ft, hallways 4-6ft wide, closets 5-9ft.
+- Garages: 15-26ft × 20-26ft. Porches: 6-13ft deep.
+- Living/Great rooms: 15-22ft × 18-24ft.
+- Convert: 1ft = 30.48cm. Round to nearest 10cm for cleanliness.
 
 ═══ WORKFLOW ═══
 1. For text-only requests: Call **generate_floor_plan** with room list and sqft.
@@ -1895,7 +1925,7 @@ ESTIMATION TIPS for sketches:
 ═══ RESPONSE RULES ═══
 1. ALWAYS call generate_floor_plan (text) or generate_from_sketch (image) when the user asks to create or redesign a floor plan.
 2. Be conversational and brief (1-3 sentences after executing actions).
-3. When recreating a sketch, describe what you see first, then generate using generate_from_sketch.
+3. When recreating a sketch, first describe what you see (room count, shape, layout), then generate using generate_from_sketch.
 4. If the user asks to add/remove specific rooms from an existing plan, use add_room/remove_room.
 5. ALWAYS call validate_floor_plan after generate_floor_plan or generate_from_sketch — no exceptions.
 6. When a user mentions wanting a "large" or "small" room, use the size parameter in generate_floor_plan rather than calling resize_room after.`;
