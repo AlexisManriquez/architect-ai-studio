@@ -1508,8 +1508,20 @@ function processFloorPlanTool(
         return { result: JSON.stringify({ success: false, reason: "No rooms provided" }), floorPlan };
       }
 
+      // Deduplicate rooms by name — keep only the first occurrence
+      const seenNames = new Set<string>();
+      const uniqueSketchRooms = sketchRooms.filter(r => {
+        const key = r.name.toLowerCase().trim();
+        if (seenNames.has(key)) {
+          console.warn(`Duplicate room name filtered: "${r.name}"`);
+          return false;
+        }
+        seenNames.add(key);
+        return true;
+      });
+
       // Validate and normalize room types
-      const rooms: FloorPlanRoom[] = sketchRooms.map(r => {
+      const rooms: FloorPlanRoom[] = uniqueSketchRooms.map(r => {
         let baseType = r.type;
         const nameParts = baseType.split("-");
         if (nameParts.length > 1 && /^\d+$/.test(nameParts[nameParts.length - 1])) {
