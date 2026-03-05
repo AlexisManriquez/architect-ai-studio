@@ -1149,8 +1149,41 @@ const floorPlanTools = [
   {
     type: "function",
     function: {
+      name: "generate_from_sketch",
+      description: `Generate a floor plan from an uploaded reference image/sketch. Instead of the procedural engine, YOU specify exact room positions and dimensions extracted from the image. Analyze the image carefully: estimate proportions, identify room types, measure relative sizes, and output explicit coordinates. The backend will auto-generate doors on shared walls and windows on exterior walls. Use cm units. Set the bounding box so rooms fit tightly. Rooms MUST share edges (no gaps) and MUST NOT overlap.`,
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Name for the floor plan" },
+          total_width: { type: "number", description: "Total bounding box width in cm" },
+          total_height: { type: "number", description: "Total bounding box height in cm" },
+          rooms: {
+            type: "array",
+            description: "Array of rooms with explicit positions and dimensions, extracted from the reference image.",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string", description: "Room name (e.g. 'Master Bedroom', 'Kitchen')" },
+                type: { type: "string", description: "Room type from the supported list" },
+                x: { type: "number", description: "X position in cm from left edge" },
+                y: { type: "number", description: "Y position in cm from top edge" },
+                width: { type: "number", description: "Room width in cm" },
+                height: { type: "number", description: "Room height in cm" },
+              },
+              required: ["name", "type", "x", "y", "width", "height"],
+            },
+          },
+        },
+        required: ["name", "total_width", "total_height", "rooms"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "validate_floor_plan",
-      description: `INSPECTOR TOOL — You MUST call this after generate_floor_plan and after making significant changes (adding/moving/removing rooms or doors). This validates:
+      description: `INSPECTOR TOOL — You MUST call this after generate_floor_plan or generate_from_sketch and after making significant changes (adding/moving/removing rooms or doors). This validates:
 1. Room connectivity — every room is reachable from the entry via doors
 2. No landlocked bedrooms — bedrooms must connect to hallway/common area, not only through other bedrooms
 3. Exterior spaces on perimeter — decks/patios are on the house edge
