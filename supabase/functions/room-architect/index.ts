@@ -1149,8 +1149,41 @@ const floorPlanTools = [
   {
     type: "function",
     function: {
+      name: "generate_from_sketch",
+      description: `Generate a floor plan from an uploaded reference image/sketch. Instead of the procedural engine, YOU specify exact room positions and dimensions extracted from the image. Analyze the image carefully: estimate proportions, identify room types, measure relative sizes, and output explicit coordinates. The backend will auto-generate doors on shared walls and windows on exterior walls. Use cm units. Set the bounding box so rooms fit tightly. Rooms MUST share edges (no gaps) and MUST NOT overlap.`,
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Name for the floor plan" },
+          total_width: { type: "number", description: "Total bounding box width in cm" },
+          total_height: { type: "number", description: "Total bounding box height in cm" },
+          rooms: {
+            type: "array",
+            description: "Array of rooms with explicit positions and dimensions, extracted from the reference image.",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string", description: "Room name (e.g. 'Master Bedroom', 'Kitchen')" },
+                type: { type: "string", description: "Room type from the supported list" },
+                x: { type: "number", description: "X position in cm from left edge" },
+                y: { type: "number", description: "Y position in cm from top edge" },
+                width: { type: "number", description: "Room width in cm" },
+                height: { type: "number", description: "Room height in cm" },
+              },
+              required: ["name", "type", "x", "y", "width", "height"],
+            },
+          },
+        },
+        required: ["name", "total_width", "total_height", "rooms"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "validate_floor_plan",
-      description: `INSPECTOR TOOL — You MUST call this after generate_floor_plan and after making significant changes (adding/moving/removing rooms or doors). This validates:
+      description: `INSPECTOR TOOL — You MUST call this after generate_floor_plan or generate_from_sketch and after making significant changes (adding/moving/removing rooms or doors). This validates:
 1. Room connectivity — every room is reachable from the entry via doors
 2. No landlocked bedrooms — bedrooms must connect to hallway/common area, not only through other bedrooms
 3. Exterior spaces on perimeter — decks/patios are on the house edge
@@ -1469,6 +1502,89 @@ function processFloorPlanTool(
       };
     }
 
+    case "generate_from_sketch": {
+      const sketchRooms = (args.rooms as Array<{ name: string; type: string; x: number; y: number; width: number; height: number }>) || [];
+      if (sketchRooms.length === 0) {
+        return { result: JSON.stringify({ success: false, reason: "No rooms provided" }), floorPlan };
+      }
+
+      // Validate and normalize room types
+      const rooms: FloorPlanRoom[] = sketchRooms.map(r => {
+        let baseType = r.type;
+        const nameParts = baseType.split("-");
+        if (nameParts.length > 1 && /^\d+$/.test(nameParts[nameParts.length - 1])) {
+          baseType = nameParts.slice(0, -1).join("-");
+        }
+        if (baseType === "master-bedroom") baseType = "bedroom";
+        if (baseType === "master-bathroom") baseType = "bathroom";
+        if (baseType === "powder-room" || baseType === "powder") baseType = "bathroom";
+        if (baseType === "pantry" || baseType === "scullery" || baseType === "wet-bar") baseType = "kitchen";
+        if (baseType === "foyer" || baseType === "mudroom") baseType = "entry";
+        if (baseType === "great-room" || baseType === "family-room") baseType = "living-room";
+        if (baseType === "deck" || baseType === "patio" || baseType === "porch") baseType = "entry";
+        const validType = ROOM_TYPES.includes(baseType as any) ? baseType : "bedroom";
+        return {
+          id: generateId(),
+          name: r.name,
+          type: validType,
+          x: Math.round(r.x),
+          y: Math.round(r.y),
+          width: Math.round(Math.max(r.width, 100)),
+          height: Math.round(Math.max(r.height, 100)),
+        };
+      });
+
+      // Normalize so min x/y = 0
+      const minX = Math.min(...rooms.map(r => r.x));
+      const minY = Math.min(...rooms.map(r => r.y));
+      if (minX !== 0 || minY !== 0) {
+        for (const r of rooms) {
+          r.x -= minX;
+          r.y -= minY;
+        }
+      }
+
+      const totalWidth = Math.max(...rooms.map(r => r.x + r.width), (args.total_width as number) || 0);
+      const totalHeight = Math.max(...rooms.map(r => r.y + r.height), (args.total_height as number) || 0);
+
+      const doors = autoGenerateDoors(rooms);
+      const windows = autoGenerateWindows(rooms);
+
+      const newPlan: FloorPlan = {
+        id: generateId(),
+        name: (args.name as string) || "Sketch Floor Plan",
+        totalWidth,
+        totalHeight,
+        rooms,
+        doors,
+        windows,
+      };
+
+      const totalSqft = rooms.reduce((s, r) => s + Math.round((r.width * r.height) / 929), 0);
+      const inspection = inspectFloorPlan(newPlan);
+
+      return {
+        result: JSON.stringify({
+          success: true,
+          rooms: rooms.length,
+          doors: doors.length,
+          windows: windows.length,
+          totalSqft,
+          room_ids: rooms.map(r => ({ id: r.id, name: r.name })),
+          inspection: {
+            passed: inspection.issues.length === 0,
+            issues: inspection.issues,
+            suggestions: inspection.suggestions,
+            note: inspection.issues.length > 0
+              ? "Some issues detected — use add_door, move_room, or resize_room to fix, then validate_floor_plan."
+              : "Floor plan passed all checks!",
+          },
+        }),
+        floorPlan: newPlan,
+        action: `Generated "${newPlan.name}" from sketch — ${rooms.length} rooms, ~${totalSqft} sqft`,
+      };
+    }
+
     case "add_room": {
       const id = generateId();
       const room: FloorPlanRoom = {
@@ -1753,18 +1869,35 @@ Do NOT use the resize_room tool afterwards if you can express the size intent up
 4. **list_rooms** — Inspect current layout with IDs and positions.
 5. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
 
+═══ SKETCH / IMAGE UPLOAD ═══
+When the user uploads a floor plan image, sketch, or blueprint:
+1. Use **generate_from_sketch** — NOT generate_floor_plan.
+2. Carefully analyze the image: identify every room, estimate its proportional size, and determine its spatial position relative to other rooms.
+3. Convert the image into cm coordinates. Use the image proportions to set total_width and total_height (e.g., a roughly 80ft × 60ft house = 2440cm × 1830cm).
+4. Place rooms so they share edges perfectly (no gaps, no overlaps). Rooms that are side-by-side must have matching coordinates.
+5. Include ALL rooms visible in the image — closets, hallways, porches, garages, pantries, etc.
+6. After calling generate_from_sketch, ALWAYS call validate_floor_plan.
+
+ESTIMATION TIPS for sketches:
+- Divide the image into a grid. If the house is ~80ft wide and a room takes up ~25% of the width, that room is ~20ft = ~610cm wide.
+- Standard room heights: bedrooms 10-14ft, bathrooms 6-10ft, kitchens 12-16ft, hallways 4-5ft wide, closets 4-6ft.
+- Garages are typically 20-26ft × 20-24ft.
+- Porches/decks are typically 6-13ft deep.
+- Rooms in the image that are adjacent MUST share an exact edge in your coordinates.
+
 ═══ WORKFLOW ═══
-1. Call **generate_floor_plan** with the room list (including size preferences) and sqft.
-2. Review the auto-inspection results included in the response.
-3. If issues exist, fix them with add_door, move_room, resize_room, etc.
-4. Call **validate_floor_plan** to confirm all issues are resolved.
+1. For text-only requests: Call **generate_floor_plan** with room list and sqft.
+2. For image uploads: Call **generate_from_sketch** with explicit room coordinates extracted from the image.
+3. Review the auto-inspection results included in the response.
+4. If issues exist, fix them with add_door, move_room, resize_room, etc.
+5. Call **validate_floor_plan** to confirm all issues are resolved.
 
 ═══ RESPONSE RULES ═══
-1. ALWAYS call generate_floor_plan when the user asks to create or redesign a floor plan.
+1. ALWAYS call generate_floor_plan (text) or generate_from_sketch (image) when the user asks to create or redesign a floor plan.
 2. Be conversational and brief (1-3 sentences after executing actions).
-3. When recreating a sketch, describe what you see first, then generate.
+3. When recreating a sketch, describe what you see first, then generate using generate_from_sketch.
 4. If the user asks to add/remove specific rooms from an existing plan, use add_room/remove_room.
-5. ALWAYS call validate_floor_plan after generate_floor_plan — no exceptions.
+5. ALWAYS call validate_floor_plan after generate_floor_plan or generate_from_sketch — no exceptions.
 6. When a user mentions wanting a "large" or "small" room, use the size parameter in generate_floor_plan rather than calling resize_room after.`;
 }
 
