@@ -31,6 +31,8 @@ export interface FloorPlanDoor {
   y: number;
   width: number;   // door width in cm (typically 90)
   orientation: "horizontal" | "vertical";
+  /** If true, this is an open archway (no physical door), used for open-concept connections */
+  isOpening?: boolean;
 }
 
 export interface FloorPlanWindow {
