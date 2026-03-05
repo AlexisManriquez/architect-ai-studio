@@ -175,6 +175,47 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
       const isHorizontal = door.orientation === "horizontal";
       const dw = isHorizontal ? door.width : 14;
       const dh = isHorizontal ? 14 : door.width;
+
+      // Open concept opening — just clear the wall, show a dashed archway line
+      if (door.isOpening) {
+        return (
+          <g key={door.id}>
+            {/* Clear wall behind opening */}
+            <rect
+              x={door.x - 2}
+              y={door.y - 2}
+              width={dw + 4}
+              height={dh + 4}
+              fill="hsl(var(--background))"
+            />
+            {/* Dashed archway indicator */}
+            {isHorizontal ? (
+              <line
+                x1={door.x}
+                y1={door.y + dh / 2}
+                x2={door.x + dw}
+                y2={door.y + dh / 2}
+                stroke="hsl(var(--muted-foreground))"
+                strokeWidth={1.5}
+                strokeDasharray="4,4"
+                opacity={0.5}
+              />
+            ) : (
+              <line
+                x1={door.x + dw / 2}
+                y1={door.y}
+                x2={door.x + dw / 2}
+                y2={door.y + dh}
+                stroke="hsl(var(--muted-foreground))"
+                strokeWidth={1.5}
+                strokeDasharray="4,4"
+                opacity={0.5}
+              />
+            )}
+          </g>
+        );
+      }
+
       const arcRadius = door.width * 0.5;
       
       return (
