@@ -756,7 +756,7 @@ const PUBLIC_TYPES = new Set(["living-room", "kitchen", "dining-room", "office",
  * 4. Guarantees zero overlaps and shared edges.
  */
 function generateProceduralLayout(
-  requestedRooms: string[],
+  requestedRooms: (string | RoomRequestInput)[],
   totalSqft: number
 ): FloorPlanRoom[] {
   const totalAreaCm2 = totalSqft * 929;
