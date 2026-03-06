@@ -286,6 +286,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         handleBackToFloorPlan,
         handleSend,
         updateItemPosition,
+        updateRoomPosition,
         roomCanvasRef,
         floorPlanCanvasRef,
       }}
