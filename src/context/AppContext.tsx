@@ -252,6 +252,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const updateRoomPosition = useCallback((roomId: string, newX: number, newY: number) => {
+    setFloorPlan(prev => {
+      const updatedRooms = prev.rooms.map(r =>
+        r.id === roomId ? { ...r, x: newX, y: newY } : r
+      );
+      // Recompute bounding box
+      let maxX = 0, maxY = 0;
+      for (const r of updatedRooms) {
+        maxX = Math.max(maxX, r.x + r.width);
+        maxY = Math.max(maxY, r.y + r.height);
+      }
+      return { ...prev, rooms: updatedRooms, totalWidth: maxX, totalHeight: maxY };
+    });
+  }, []);
+
   return (
     <AppContext.Provider
       value={{
