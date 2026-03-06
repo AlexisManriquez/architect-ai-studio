@@ -104,6 +104,7 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
 
     const handleRoomMouseDown = useCallback((e: React.MouseEvent, room: FloorPlanRoom) => {
       e.stopPropagation();
+      didDragRef.current = false;
       const roomX = (e.clientX - offset.x) / scale - room.x;
       const roomY = (e.clientY - offset.y) / scale - room.y;
       setDragOffset({ x: roomX, y: roomY });
@@ -111,12 +112,11 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
     }, [offset, scale]);
 
     const handleRoomClick = useCallback((e: React.MouseEvent, room: FloorPlanRoom) => {
-      // Only enter room if we didn't drag
-      if (!draggingRoomId) {
+      if (!didDragRef.current) {
         e.stopPropagation();
         onEnterRoom(room);
       }
-    }, [draggingRoomId, onEnterRoom]);
+    }, [onEnterRoom]);
 
     // Check if a wall is shared with another room (for internal walls)
     const isSharedWall = useCallback((room: FloorPlanRoom, side: "north" | "south" | "east" | "west") => {
