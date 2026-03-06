@@ -73,9 +73,9 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
       if (draggingRoomId) {
+        didDragRef.current = true;
         const newX = (e.clientX - offset.x) / scale - dragOffset.x;
         const newY = (e.clientY - offset.y) / scale - dragOffset.y;
-        // Live update position (unsnapped for smooth dragging)
         setFloorPlan(prev => ({
           ...prev,
           rooms: prev.rooms.map(r =>
