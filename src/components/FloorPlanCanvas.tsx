@@ -36,6 +36,7 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
     // Drag state
     const [draggingRoomId, setDraggingRoomId] = useState<string | null>(null);
     const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+    const didDragRef = useRef(false);
 
     const { updateRoomPosition, setFloorPlan } = useAppContext();
 
