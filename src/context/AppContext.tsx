@@ -34,6 +34,7 @@ interface AppContextValue {
   handleBackToFloorPlan: () => void;
   handleSend: (text: string, userImages?: string[]) => Promise<void>;
   updateItemPosition: (roomId: string, itemId: string, x: number, y: number) => void;
+  updateRoomPosition: (roomId: string, newX: number, newY: number) => void;
   roomCanvasRef: React.RefObject<{ getSvgElement: () => SVGSVGElement | null } | null>;
   floorPlanCanvasRef: React.RefObject<{ getSvgElement: () => SVGSVGElement | null } | null>;
 }
@@ -251,6 +252,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const updateRoomPosition = useCallback((roomId: string, newX: number, newY: number) => {
+    setFloorPlan(prev => {
+      const updatedRooms = prev.rooms.map(r =>
+        r.id === roomId ? { ...r, x: newX, y: newY } : r
+      );
+      // Recompute bounding box
+      let maxX = 0, maxY = 0;
+      for (const r of updatedRooms) {
+        maxX = Math.max(maxX, r.x + r.width);
+        maxY = Math.max(maxY, r.y + r.height);
+      }
+      return { ...prev, rooms: updatedRooms, totalWidth: maxX, totalHeight: maxY };
+    });
+  }, []);
+
   return (
     <AppContext.Provider
       value={{
@@ -270,6 +286,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         handleBackToFloorPlan,
         handleSend,
         updateItemPosition,
+        updateRoomPosition,
         roomCanvasRef,
         floorPlanCanvasRef,
       }}

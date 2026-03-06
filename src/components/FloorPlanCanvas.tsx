@@ -2,6 +2,7 @@ import { useRef, useState, useCallback, useEffect, forwardRef, useImperativeHand
 import type { FloorPlan, FloorPlanRoom } from "@/types/floorplan";
 import { ROOM_TYPE_COLORS, ROOM_TYPE_LABELS } from "@/types/floorplan";
 import ActionLog, { type ActionEntry } from "@/components/ActionLog";
+import { useAppContext } from "@/context/AppContext";
 
 interface FloorPlanCanvasProps {
   floorPlan: FloorPlan;
@@ -16,6 +17,11 @@ export interface FloorPlanCanvasHandle {
 const WALL_THICKNESS = 8;
 const INNER_WALL = 4;
 const PADDING = 60;
+const SNAP_GRID = 50; // snap to nearest 50cm
+
+function snapTo(value: number, grid: number): number {
+  return Math.round(value / grid) * grid;
+}
 
 const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
   ({ floorPlan, actions = [], onEnterRoom }, ref) => {
@@ -26,6 +32,13 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
     const [isPanning, setIsPanning] = useState(false);
     const [panStart, setPanStart] = useState({ x: 0, y: 0 });
     const [hoveredRoom, setHoveredRoom] = useState<string | null>(null);
+
+    // Drag state
+    const [draggingRoomId, setDraggingRoomId] = useState<string | null>(null);
+    const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+    const didDragRef = useRef(false);
+
+    const { updateRoomPosition, setFloorPlan } = useAppContext();
 
     useImperativeHandle(ref, () => ({
       getSvgElement: () => svgRef.current,
@@ -51,18 +64,59 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
     }, []);
 
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
+      if (draggingRoomId) return;
       if (e.button === 0 || e.button === 1) {
         setIsPanning(true);
         setPanStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
       }
-    }, [offset]);
+    }, [offset, draggingRoomId]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
+      if (draggingRoomId) {
+        didDragRef.current = true;
+        const newX = (e.clientX - offset.x) / scale - dragOffset.x;
+        const newY = (e.clientY - offset.y) / scale - dragOffset.y;
+        setFloorPlan(prev => ({
+          ...prev,
+          rooms: prev.rooms.map(r =>
+            r.id === draggingRoomId ? { ...r, x: Math.round(newX), y: Math.round(newY) } : r
+          ),
+        }));
+        return;
+      }
       if (!isPanning) return;
       setOffset({ x: e.clientX - panStart.x, y: e.clientY - panStart.y });
-    }, [isPanning, panStart]);
+    }, [isPanning, panStart, draggingRoomId, dragOffset, offset, scale, setFloorPlan]);
 
-    const handleMouseUp = useCallback(() => setIsPanning(false), []);
+    const handleMouseUp = useCallback(() => {
+      if (draggingRoomId) {
+        // Snap to grid on release
+        const room = floorPlan.rooms.find(r => r.id === draggingRoomId);
+        if (room) {
+          const snappedX = snapTo(Math.max(0, room.x), SNAP_GRID);
+          const snappedY = snapTo(Math.max(0, room.y), SNAP_GRID);
+          updateRoomPosition(draggingRoomId, snappedX, snappedY);
+        }
+        setDraggingRoomId(null);
+      }
+      setIsPanning(false);
+    }, [draggingRoomId, floorPlan.rooms, updateRoomPosition]);
+
+    const handleRoomMouseDown = useCallback((e: React.MouseEvent, room: FloorPlanRoom) => {
+      e.stopPropagation();
+      didDragRef.current = false;
+      const roomX = (e.clientX - offset.x) / scale - room.x;
+      const roomY = (e.clientY - offset.y) / scale - room.y;
+      setDragOffset({ x: roomX, y: roomY });
+      setDraggingRoomId(room.id);
+    }, [offset, scale]);
+
+    const handleRoomClick = useCallback((e: React.MouseEvent, room: FloorPlanRoom) => {
+      if (!didDragRef.current) {
+        e.stopPropagation();
+        onEnterRoom(room);
+      }
+    }, [onEnterRoom]);
 
     // Check if a wall is shared with another room (for internal walls)
     const isSharedWall = useCallback((room: FloorPlanRoom, side: "north" | "south" | "east" | "west") => {
@@ -79,6 +133,7 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
 
     const renderRoom = (room: FloorPlanRoom) => {
       const isHovered = hoveredRoom === room.id;
+      const isDragging = draggingRoomId === room.id;
       const color = ROOM_TYPE_COLORS[room.type as keyof typeof ROOM_TYPE_COLORS] || "220 15% 90%";
       const sqft = Math.round((room.width * room.height) / 929);
       const label = room.name || ROOM_TYPE_LABELS[room.type as keyof typeof ROOM_TYPE_LABELS] || room.type;
@@ -87,10 +142,12 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
       return (
         <g
           key={room.id}
-          onClick={(e) => { e.stopPropagation(); onEnterRoom(room); }}
+          onMouseDown={(e) => handleRoomMouseDown(e, room)}
+          onClick={(e) => handleRoomClick(e, room)}
           onMouseEnter={() => setHoveredRoom(room.id)}
           onMouseLeave={() => setHoveredRoom(null)}
-          style={{ cursor: "pointer" }}
+          style={{ cursor: isDragging ? "grabbing" : "grab" }}
+          opacity={isDragging ? 0.7 : 1}
         >
           {/* Room fill */}
           <rect
@@ -101,6 +158,21 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
             fill={`hsl(${color})`}
             opacity={isHovered ? 1 : 0.85}
           />
+
+          {/* Drag outline */}
+          {isDragging && (
+            <rect
+              x={room.x - 3}
+              y={room.y - 3}
+              width={room.width + 6}
+              height={room.height + 6}
+              fill="none"
+              stroke="hsl(var(--primary))"
+              strokeWidth={2}
+              strokeDasharray="6 3"
+              rx={4}
+            />
+          )}
 
           {/* Internal walls — draw thinner lines for shared walls */}
           {(["north", "south", "east", "west"] as const).map(side => {
@@ -156,7 +228,7 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
             ~{sqft} sqft
           </text>
           {/* Hover overlay */}
-          {isHovered && (
+          {isHovered && !isDragging && (
             <rect
               x={room.x}
               y={room.y}
@@ -176,86 +248,33 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
       const dw = isHorizontal ? door.width : 14;
       const dh = isHorizontal ? 14 : door.width;
 
-      // Open concept opening — just clear the wall, show a dashed archway line
       if (door.isOpening) {
         return (
           <g key={door.id}>
-            {/* Clear wall behind opening */}
-            <rect
-              x={door.x - 2}
-              y={door.y - 2}
-              width={dw + 4}
-              height={dh + 4}
-              fill="hsl(var(--background))"
-            />
-            {/* Dashed archway indicator */}
+            <rect x={door.x - 2} y={door.y - 2} width={dw + 4} height={dh + 4} fill="hsl(var(--background))" />
             {isHorizontal ? (
-              <line
-                x1={door.x}
-                y1={door.y + dh / 2}
-                x2={door.x + dw}
-                y2={door.y + dh / 2}
-                stroke="hsl(var(--muted-foreground))"
-                strokeWidth={1.5}
-                strokeDasharray="4,4"
-                opacity={0.5}
-              />
+              <line x1={door.x} y1={door.y + dh / 2} x2={door.x + dw} y2={door.y + dh / 2}
+                stroke="hsl(var(--muted-foreground))" strokeWidth={1.5} strokeDasharray="4,4" opacity={0.5} />
             ) : (
-              <line
-                x1={door.x + dw / 2}
-                y1={door.y}
-                x2={door.x + dw / 2}
-                y2={door.y + dh}
-                stroke="hsl(var(--muted-foreground))"
-                strokeWidth={1.5}
-                strokeDasharray="4,4"
-                opacity={0.5}
-              />
+              <line x1={door.x + dw / 2} y1={door.y} x2={door.x + dw / 2} y2={door.y + dh}
+                stroke="hsl(var(--muted-foreground))" strokeWidth={1.5} strokeDasharray="4,4" opacity={0.5} />
             )}
           </g>
         );
       }
 
       const arcRadius = door.width * 0.5;
-      
       return (
         <g key={door.id}>
-          {/* Clear wall behind door */}
-          <rect
-            x={door.x - 2}
-            y={door.y - 2}
-            width={dw + 4}
-            height={dh + 4}
-            fill="hsl(var(--background))"
-          />
-          {/* Door opening line */}
-          <rect
-            x={door.x}
-            y={door.y}
-            width={dw}
-            height={dh}
-            fill="hsl(var(--background))"
-            stroke="hsl(var(--accent-foreground))"
-            strokeWidth={1.5}
-            strokeDasharray="6,3"
-          />
-          {/* Door swing arc */}
+          <rect x={door.x - 2} y={door.y - 2} width={dw + 4} height={dh + 4} fill="hsl(var(--background))" />
+          <rect x={door.x} y={door.y} width={dw} height={dh}
+            fill="hsl(var(--background))" stroke="hsl(var(--accent-foreground))" strokeWidth={1.5} strokeDasharray="6,3" />
           {isHorizontal ? (
-            <path
-              d={`M ${door.x},${door.y + dh / 2} A ${arcRadius} ${arcRadius} 0 0 1 ${door.x + arcRadius},${door.y + dh / 2 + arcRadius}`}
-              fill="none"
-              stroke="hsl(var(--muted-foreground))"
-              strokeWidth={1}
-              opacity={0.5}
-            />
+            <path d={`M ${door.x},${door.y + dh / 2} A ${arcRadius} ${arcRadius} 0 0 1 ${door.x + arcRadius},${door.y + dh / 2 + arcRadius}`}
+              fill="none" stroke="hsl(var(--muted-foreground))" strokeWidth={1} opacity={0.5} />
           ) : (
-            <path
-              d={`M ${door.x + dw / 2},${door.y} A ${arcRadius} ${arcRadius} 0 0 1 ${door.x + dw / 2 + arcRadius},${door.y + arcRadius}`}
-              fill="none"
-              stroke="hsl(var(--muted-foreground))"
-              strokeWidth={1}
-              opacity={0.5}
-            />
+            <path d={`M ${door.x + dw / 2},${door.y} A ${arcRadius} ${arcRadius} 0 0 1 ${door.x + dw / 2 + arcRadius},${door.y + arcRadius}`}
+              fill="none" stroke="hsl(var(--muted-foreground))" strokeWidth={1} opacity={0.5} />
           )}
         </g>
       );
@@ -267,15 +286,8 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
       const wh = isHorizontal ? 8 : win.width;
       return (
         <g key={win.id}>
-          <rect
-            x={win.x}
-            y={win.y}
-            width={ww}
-            height={wh}
-            fill="hsl(190 80% 70%)"
-            stroke="hsl(190 60% 50%)"
-            strokeWidth={1.5}
-          />
+          <rect x={win.x} y={win.y} width={ww} height={wh}
+            fill="hsl(190 80% 70%)" stroke="hsl(190 60% 50%)" strokeWidth={1.5} />
           {isHorizontal ? (
             <>
               <line x1={win.x} y1={win.y + 2.5} x2={win.x + ww} y2={win.y + 2.5} stroke="hsl(190 60% 50%)" strokeWidth={0.8} />
@@ -291,40 +303,27 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
       );
     };
 
-    // Compute the outer boundary as the convex hull of all room edges
     const renderOuterWalls = () => {
       if (floorPlan.rooms.length === 0) return null;
-
-      // For each room, draw exterior walls (walls NOT shared with another room)
       return floorPlan.rooms.map(room => {
         const walls: JSX.Element[] = [];
         const id = room.id;
-
         if (!isSharedWall(room, "north")) {
-          walls.push(
-            <line key={`${id}-ext-n`} x1={room.x} y1={room.y} x2={room.x + room.width} y2={room.y}
-              stroke="hsl(var(--foreground))" strokeWidth={WALL_THICKNESS} strokeLinecap="round" />
-          );
+          walls.push(<line key={`${id}-ext-n`} x1={room.x} y1={room.y} x2={room.x + room.width} y2={room.y}
+            stroke="hsl(var(--foreground))" strokeWidth={WALL_THICKNESS} strokeLinecap="round" />);
         }
         if (!isSharedWall(room, "south")) {
-          walls.push(
-            <line key={`${id}-ext-s`} x1={room.x} y1={room.y + room.height} x2={room.x + room.width} y2={room.y + room.height}
-              stroke="hsl(var(--foreground))" strokeWidth={WALL_THICKNESS} strokeLinecap="round" />
-          );
+          walls.push(<line key={`${id}-ext-s`} x1={room.x} y1={room.y + room.height} x2={room.x + room.width} y2={room.y + room.height}
+            stroke="hsl(var(--foreground))" strokeWidth={WALL_THICKNESS} strokeLinecap="round" />);
         }
         if (!isSharedWall(room, "west")) {
-          walls.push(
-            <line key={`${id}-ext-w`} x1={room.x} y1={room.y} x2={room.x} y2={room.y + room.height}
-              stroke="hsl(var(--foreground))" strokeWidth={WALL_THICKNESS} strokeLinecap="round" />
-          );
+          walls.push(<line key={`${id}-ext-w`} x1={room.x} y1={room.y} x2={room.x} y2={room.y + room.height}
+            stroke="hsl(var(--foreground))" strokeWidth={WALL_THICKNESS} strokeLinecap="round" />);
         }
         if (!isSharedWall(room, "east")) {
-          walls.push(
-            <line key={`${id}-ext-e`} x1={room.x + room.width} y1={room.y} x2={room.x + room.width} y2={room.y + room.height}
-              stroke="hsl(var(--foreground))" strokeWidth={WALL_THICKNESS} strokeLinecap="round" />
-          );
+          walls.push(<line key={`${id}-ext-e`} x1={room.x + room.width} y1={room.y} x2={room.x + room.width} y2={room.y + room.height}
+            stroke="hsl(var(--foreground))" strokeWidth={WALL_THICKNESS} strokeLinecap="round" />);
         }
-
         return <g key={`ext-${id}`}>{walls}</g>;
       });
     };
@@ -334,7 +333,8 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
     return (
       <div
         ref={containerRef}
-        className="flex-1 bg-background overflow-hidden cursor-grab active:cursor-grabbing relative"
+        className="flex-1 bg-background overflow-hidden relative"
+        style={{ cursor: draggingRoomId ? "grabbing" : isPanning ? "grabbing" : "grab" }}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -357,7 +357,7 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
         {floorPlan.rooms.length > 0 && (
           <div className="absolute bottom-12 left-3 z-10">
             <div className="bg-card/90 backdrop-blur-sm border border-border rounded-md px-3 py-1.5 text-xs text-muted-foreground">
-              Click a room to enter & furnish it
+              Drag rooms to reposition · Double-click to enter & furnish
             </div>
           </div>
         )}
@@ -366,27 +366,13 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
 
         <svg ref={svgRef} width="100%" height="100%" style={{ position: "absolute", inset: 0 }}>
           <g transform={`translate(${offset.x}, ${offset.y}) scale(${scale})`}>
-            {/* Room fills first */}
             {floorPlan.rooms.map(renderRoom)}
-
-            {/* Outer walls (thick exterior) */}
             {renderOuterWalls()}
-
-            {/* Doors (rendered on top of walls) */}
             {floorPlan.doors.map(renderDoor)}
-
-            {/* Windows */}
             {floorPlan.windows.map(renderWindow)}
-
-            {/* Overall dimensions label */}
             {floorPlan.rooms.length > 0 && (
-              <text
-                x={floorPlan.totalWidth / 2}
-                y={floorPlan.totalHeight + 30}
-                textAnchor="middle"
-                fill="hsl(var(--muted-foreground))"
-                fontSize={12}
-              >
+              <text x={floorPlan.totalWidth / 2} y={floorPlan.totalHeight + 30}
+                textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize={12}>
                 {(floorPlan.totalWidth / 100).toFixed(1)}m × {(floorPlan.totalHeight / 100).toFixed(1)}m
               </text>
             )}
@@ -395,14 +381,10 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
 
         {/* Zoom controls */}
         <div className="absolute bottom-4 right-4 flex gap-1">
-          <button
-            onClick={() => setScale((s) => Math.min(3, s * 1.2))}
-            className="w-8 h-8 rounded bg-card border border-border flex items-center justify-center text-foreground hover:bg-accent text-lg font-bold"
-          >+</button>
-          <button
-            onClick={() => setScale((s) => Math.max(0.2, s * 0.8))}
-            className="w-8 h-8 rounded bg-card border border-border flex items-center justify-center text-foreground hover:bg-accent text-lg font-bold"
-          >−</button>
+          <button onClick={() => setScale((s) => Math.min(3, s * 1.2))}
+            className="w-8 h-8 rounded bg-card border border-border flex items-center justify-center text-foreground hover:bg-accent text-lg font-bold">+</button>
+          <button onClick={() => setScale((s) => Math.max(0.2, s * 0.8))}
+            className="w-8 h-8 rounded bg-card border border-border flex items-center justify-center text-foreground hover:bg-accent text-lg font-bold">−</button>
         </div>
       </div>
     );
