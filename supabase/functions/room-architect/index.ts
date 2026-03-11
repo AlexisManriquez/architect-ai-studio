@@ -3,7 +3,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+    "authorization, x-client-info, apikey, content-type, x-user-api-key, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
 // ─── Asset Catalog ──────────────────────────────────────────────────────────
@@ -1987,8 +1987,10 @@ serve(async (req) => {
       });
     }
 
+    const userApiKey = req.headers.get("x-user-api-key");
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
+    const useDirectGemini = !!userApiKey;
+    if (!useDirectGemini && !LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
 
     const isFloorPlanMode = mode === "floorplan";
     let currentRoomState: RoomState = roomState || { roomWidth: 600, roomDepth: 500, items: [] };
@@ -2061,14 +2063,22 @@ serve(async (req) => {
             // Force tool use on first call when no actions taken yet
             const currentToolChoice = (i === 0 && actionLog.length === 0) ? "required" : "auto";
 
-            const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+            const apiUrl = useDirectGemini
+              ? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+              : "https://ai.gateway.lovable.dev/v1/chat/completions";
+            const apiKey = useDirectGemini ? userApiKey : LOVABLE_API_KEY;
+            const apiModel = useDirectGemini
+              ? (hasUserImages ? "gemini-2.5-pro" : "gemini-2.5-flash")
+              : model;
+
+            const response = await fetch(apiUrl, {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${LOVABLE_API_KEY}`,
+                Authorization: `Bearer ${apiKey}`,
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
-                model,
+                model: apiModel,
                 messages: aiMessages,
                 tools,
                 tool_choice: currentToolChoice,
