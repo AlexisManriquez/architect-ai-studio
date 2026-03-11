@@ -93,12 +93,9 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
 
     const handleMouseUp = useCallback(() => {
       if (draggingRoomId) {
-        // Snap to grid on release
         const room = floorPlan.rooms.find(r => r.id === draggingRoomId);
         if (room) {
-          const snappedX = snapTo(Math.max(0, room.x), SNAP_GRID);
-          const snappedY = snapTo(Math.max(0, room.y), SNAP_GRID);
-          updateRoomPosition(draggingRoomId, snappedX, snappedY);
+          updateRoomPosition(draggingRoomId, room.x, room.y);
         }
         setDraggingRoomId(null);
       }
