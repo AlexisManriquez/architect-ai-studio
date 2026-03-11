@@ -2063,10 +2063,18 @@ serve(async (req) => {
             // Force tool use on first call when no actions taken yet
             const currentToolChoice = (i === 0 && actionLog.length === 0) ? "required" : "auto";
 
-            const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+            const apiUrl = useDirectGemini
+              ? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+              : "https://ai.gateway.lovable.dev/v1/chat/completions";
+            const apiKey = useDirectGemini ? userApiKey : LOVABLE_API_KEY;
+            const apiModel = useDirectGemini
+              ? (hasUserImages ? "gemini-2.5-pro" : "gemini-2.5-flash")
+              : model;
+
+            const response = await fetch(apiUrl, {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${LOVABLE_API_KEY}`,
+                Authorization: `Bearer ${apiKey}`,
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
