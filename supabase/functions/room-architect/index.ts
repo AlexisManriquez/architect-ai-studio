@@ -1987,8 +1987,10 @@ serve(async (req) => {
       });
     }
 
+    const userApiKey = req.headers.get("x-user-api-key");
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
+    const useDirectGemini = !!userApiKey;
+    if (!useDirectGemini && !LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
 
     const isFloorPlanMode = mode === "floorplan";
     let currentRoomState: RoomState = roomState || { roomWidth: 600, roomDepth: 500, items: [] };
