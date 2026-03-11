@@ -75,12 +75,14 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
       if (draggingRoomId) {
         didDragRef.current = true;
-        const newX = (e.clientX - offset.x) / scale - dragOffset.x;
-        const newY = (e.clientY - offset.y) / scale - dragOffset.y;
+        const rawX = (e.clientX - offset.x) / scale - dragOffset.x;
+        const rawY = (e.clientY - offset.y) / scale - dragOffset.y;
+        const snappedX = snapTo(Math.max(0, rawX), SNAP_GRID);
+        const snappedY = snapTo(Math.max(0, rawY), SNAP_GRID);
         setFloorPlan(prev => ({
           ...prev,
           rooms: prev.rooms.map(r =>
-            r.id === draggingRoomId ? { ...r, x: Math.round(newX), y: Math.round(newY) } : r
+            r.id === draggingRoomId ? { ...r, x: snappedX, y: snappedY } : r
           ),
         }));
         return;
