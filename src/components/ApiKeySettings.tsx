@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Settings, Check, X, Key } from "lucide-react";
+import { Settings, Check, X, Key, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 const STORAGE_KEY = "gemini-api-key";
