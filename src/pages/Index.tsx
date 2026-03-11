@@ -4,6 +4,7 @@ import FloorPlanCanvas from "@/components/FloorPlanCanvas";
 import { useAppContext } from "@/context/AppContext";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import ApiKeySettings from "@/components/ApiKeySettings";
 
 const Index = () => {
   const {
