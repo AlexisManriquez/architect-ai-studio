@@ -151,14 +151,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         requestBody.roomName = activeRoom.name;
       }
 
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+      };
+      const storedKey = getStoredApiKey();
+      if (storedKey) headers["x-user-api-key"] = storedKey;
+
       const response = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/room-architect`,
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-          },
+          headers,
           body: JSON.stringify(requestBody),
         }
       );
