@@ -45,6 +45,7 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
     }));
 
     useEffect(() => {
+      if (draggingRoomId) return;
       if (!containerRef.current || floorPlan.totalWidth === 0) return;
       const rect = containerRef.current.getBoundingClientRect();
       const sx = (rect.width - PADDING * 2) / (floorPlan.totalWidth + WALL_THICKNESS * 2);
@@ -55,7 +56,7 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
         x: (rect.width - floorPlan.totalWidth * s) / 2,
         y: (rect.height - floorPlan.totalHeight * s) / 2,
       });
-    }, [floorPlan.totalWidth, floorPlan.totalHeight]);
+    }, [floorPlan.totalWidth, floorPlan.totalHeight, draggingRoomId]);
 
     const handleWheel = useCallback((e: React.WheelEvent) => {
       e.preventDefault();
