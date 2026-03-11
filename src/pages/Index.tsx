@@ -4,6 +4,7 @@ import FloorPlanCanvas from "@/components/FloorPlanCanvas";
 import { useAppContext } from "@/context/AppContext";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import ApiKeySettings from "@/components/ApiKeySettings";
 
 const Index = () => {
   const {
@@ -56,9 +57,10 @@ const Index = () => {
               <div>
                 <h2 className="text-lg font-bold text-foreground">{chatTitle}</h2>
                 <p className="text-xs text-muted-foreground">{chatSubtitle}</p>
-              </div>
             </div>
+            <ApiKeySettings />
           </div>
+        </div>
         </div>
         <ChatPanel
           messages={messages}
