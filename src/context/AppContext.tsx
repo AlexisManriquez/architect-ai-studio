@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, useRef, type ReactNode } from "react";
+import { getStoredApiKey } from "@/components/ApiKeySettings";
 import type { RoomState, ChatMessage } from "@/types/room";
 import type { FloorPlan, FloorPlanRoom, AppMode } from "@/types/floorplan";
 import type { ActionEntry } from "@/components/ActionLog";
