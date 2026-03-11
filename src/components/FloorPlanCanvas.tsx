@@ -17,7 +17,7 @@ export interface FloorPlanCanvasHandle {
 const WALL_THICKNESS = 8;
 const INNER_WALL = 4;
 const PADDING = 60;
-const SNAP_GRID = 50; // snap to nearest 50cm
+const SNAP_GRID = 10; // snap to nearest 10cm
 
 function snapTo(value: number, grid: number): number {
   return Math.round(value / grid) * grid;
@@ -45,6 +45,7 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
     }));
 
     useEffect(() => {
+      if (draggingRoomId) return;
       if (!containerRef.current || floorPlan.totalWidth === 0) return;
       const rect = containerRef.current.getBoundingClientRect();
       const sx = (rect.width - PADDING * 2) / (floorPlan.totalWidth + WALL_THICKNESS * 2);
@@ -55,7 +56,7 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
         x: (rect.width - floorPlan.totalWidth * s) / 2,
         y: (rect.height - floorPlan.totalHeight * s) / 2,
       });
-    }, [floorPlan.totalWidth, floorPlan.totalHeight]);
+    }, [floorPlan.totalWidth, floorPlan.totalHeight, draggingRoomId]);
 
     const handleWheel = useCallback((e: React.WheelEvent) => {
       e.preventDefault();
@@ -74,12 +75,14 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
       if (draggingRoomId) {
         didDragRef.current = true;
-        const newX = (e.clientX - offset.x) / scale - dragOffset.x;
-        const newY = (e.clientY - offset.y) / scale - dragOffset.y;
+        const rawX = (e.clientX - offset.x) / scale - dragOffset.x;
+        const rawY = (e.clientY - offset.y) / scale - dragOffset.y;
+        const snappedX = snapTo(Math.max(0, rawX), SNAP_GRID);
+        const snappedY = snapTo(Math.max(0, rawY), SNAP_GRID);
         setFloorPlan(prev => ({
           ...prev,
           rooms: prev.rooms.map(r =>
-            r.id === draggingRoomId ? { ...r, x: Math.round(newX), y: Math.round(newY) } : r
+            r.id === draggingRoomId ? { ...r, x: snappedX, y: snappedY } : r
           ),
         }));
         return;
@@ -90,12 +93,9 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
 
     const handleMouseUp = useCallback(() => {
       if (draggingRoomId) {
-        // Snap to grid on release
         const room = floorPlan.rooms.find(r => r.id === draggingRoomId);
         if (room) {
-          const snappedX = snapTo(Math.max(0, room.x), SNAP_GRID);
-          const snappedY = snapTo(Math.max(0, room.y), SNAP_GRID);
-          updateRoomPosition(draggingRoomId, snappedX, snappedY);
+          updateRoomPosition(draggingRoomId, room.x, room.y);
         }
         setDraggingRoomId(null);
       }
