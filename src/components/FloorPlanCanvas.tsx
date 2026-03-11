@@ -17,7 +17,7 @@ export interface FloorPlanCanvasHandle {
 const WALL_THICKNESS = 8;
 const INNER_WALL = 4;
 const PADDING = 60;
-const SNAP_GRID = 50; // snap to nearest 50cm
+const SNAP_GRID = 10; // snap to nearest 10cm
 
 function snapTo(value: number, grid: number): number {
   return Math.round(value / grid) * grid;
