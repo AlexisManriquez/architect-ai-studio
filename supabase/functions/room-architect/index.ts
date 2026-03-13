@@ -1852,18 +1852,21 @@ function processFloorPlanTool(
     }
 
     case "validate_floor_plan": {
-      const inspection = inspectFloorPlan(floorPlan);
+      // Auto-repair before inspecting
+      const { plan: repairedPlan, repairs } = autoRepairFloorPlan(floorPlan);
+      const inspection = inspectFloorPlan(repairedPlan);
       const passed = inspection.issues.length === 0;
       return {
         result: JSON.stringify({
           passed,
           issues: inspection.issues,
           suggestions: inspection.suggestions,
+          repairs: repairs.length > 0 ? repairs : undefined,
           summary: passed
-            ? "✅ Floor plan passed all validation checks!"
-            : `❌ Found ${inspection.issues.length} issue(s) that MUST be fixed. Read each issue and fix them by adding doors, moving rooms, or restructuring. Then call validate_floor_plan again.`,
+            ? "✅ Floor plan passed all validation checks!" + (repairs.length > 0 ? ` (auto-fixed ${repairs.length} issue(s))` : "")
+            : `❌ Found ${inspection.issues.length} remaining issue(s) after auto-repair. Read each issue and fix them.`,
         }),
-        floorPlan,
+        floorPlan: repairedPlan,
         action: passed ? "✅ Floor plan validated — all checks passed" : `🔍 Inspector found ${inspection.issues.length} issue(s) to fix`,
       };
     }
