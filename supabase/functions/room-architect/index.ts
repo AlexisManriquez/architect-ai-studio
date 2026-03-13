@@ -2204,7 +2204,7 @@ Each room object accepts an optional "size" field: "small", "normal", or "large"
 Use the "size" parameter when the user explicitly asks for a bigger or smaller specific room.
 Example: User says "I want a large master bedroom and a small office" →
   { "type": "master-bedroom", "size": "large" }, { "type": "office", "size": "small" }
-Do NOT use the resize_room tool afterwards if you can express the size intent upfront in generate_floor_plan.
+Prefer using size parameters in generate_floor_plan for initial generation. Use resize_room with target_sqft for post-generation adjustments (e.g. "make the master bedroom 100 sqft bigger" → calculate current sqft + 100 and pass as target_sqft).
 
 ═══ TOOLS ═══
 1. **generate_floor_plan** — Provide room list (with optional sizes) + target sqft. The engine handles coordinates, doors, and windows.
