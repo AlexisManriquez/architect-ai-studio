@@ -1459,14 +1459,63 @@ function processFloorPlanTool(
 ): { result: string; floorPlan: FloorPlan; action?: string } {
   switch (name) {
     case "generate_floor_plan": {
-      const targetSqft = (args.target_sqft as number) || 1500;
-      const requestedRooms = (args.requested_rooms as (string | RoomRequestInput)[]) || [];
-      
-      if (requestedRooms.length === 0) {
-        return { result: JSON.stringify({ success: false, reason: "No rooms requested" }), floorPlan };
+      const targetSqft = (args.target_sqft as number) || 2000;
+      const bedrooms = (args.bedrooms as number) || 3;
+      const bathroomsRaw = (args.bathrooms as number) ?? 2.5;
+      const includeGarage = (args.include_garage as boolean) ?? true;
+      const includeOffice = (args.include_office as boolean) ?? false;
+      const includeLaundry = (args.include_laundry as boolean) ?? false;
+      const extraRooms = (args.extra_rooms as RoomRequestInput[]) || [];
+
+      // Build room list from parameters
+      const requestedRooms: RoomRequestInput[] = [];
+
+      // Living room + kitchen + dining (always included)
+      requestedRooms.push({ type: "living-room" });
+      requestedRooms.push({ type: "kitchen" });
+      requestedRooms.push({ type: "dining-room" });
+
+      // Entry
+      requestedRooms.push({ type: "entry" });
+
+      // Bedrooms: first is master (large)
+      for (let i = 1; i <= bedrooms; i++) {
+        if (i === 1) {
+          requestedRooms.push({ type: "master-bedroom", size: "large" });
+        } else {
+          requestedRooms.push({ type: `bedroom-${i}` });
+        }
       }
 
-      // Use the procedural layout engine — zero overlaps guaranteed
+      // Bathrooms: full baths + optional half bath
+      const fullBaths = Math.floor(bathroomsRaw);
+      const hasHalfBath = bathroomsRaw % 1 >= 0.5;
+      for (let i = 1; i <= fullBaths; i++) {
+        if (i === 1 && bedrooms >= 1) {
+          requestedRooms.push({ type: "master-bathroom" });
+        } else {
+          requestedRooms.push({ type: `bathroom-${i}` });
+        }
+      }
+      if (hasHalfBath) {
+        requestedRooms.push({ type: "bathroom", size: "small" }); // half bath / powder room
+      }
+
+      // Garage
+      if (includeGarage) {
+        requestedRooms.push({ type: "garage" });
+      }
+
+      // Optional rooms
+      if (includeOffice) requestedRooms.push({ type: "office" });
+      if (includeLaundry) requestedRooms.push({ type: "laundry" });
+
+      // Extra rooms
+      requestedRooms.push(...extraRooms);
+
+      console.log(`generate_floor_plan: ${bedrooms} bed, ${bathroomsRaw} bath, ${targetSqft} sqft, garage=${includeGarage}, rooms=${requestedRooms.length}`);
+
+      // Use the template-based layout engine
       const rooms = generateProceduralLayout(requestedRooms, targetSqft);
       
       const totalWidth = Math.max(...rooms.map(r => r.x + r.width));
