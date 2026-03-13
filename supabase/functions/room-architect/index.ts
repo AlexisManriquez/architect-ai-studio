@@ -1120,7 +1120,7 @@ Do NOT provide raw coordinates — just the room_id and target_sqft.`,
     type: "function",
     function: {
       name: "move_room",
-      description: "Move a room to a new position.",
+      description: "Move a room to an absolute position. After move, doors/windows are auto-regenerated and connectivity is auto-repaired.",
       parameters: {
         type: "object",
         properties: {
@@ -1129,6 +1129,23 @@ Do NOT provide raw coordinates — just the room_id and target_sqft.`,
           y: { type: "number" },
         },
         required: ["room_id", "x", "y"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "connect_rooms",
+      description: `Connect two rooms. If they are already adjacent, a door is added/ensured between them. If not adjacent, room_2 is moved adjacent to room_1 (pairing) and neighboring rooms are shifted to make space. Use this for requests like "connect master bathroom to master bedroom" or "pair room A with room B".",
+      parameters: {
+        type: "object",
+        properties: {
+          room_1: { type: "string", description: "Room 1 reference: ID or name (e.g. 'Master Bedroom')" },
+          room_2: { type: "string", description: "Room 2 reference: ID or name (e.g. 'Master Bathroom')" },
+          preferred_side: { type: "string", enum: ["north", "south", "east", "west"], description: "Optional side of room_1 where room_2 should be placed." },
+        },
+        required: ["room_1", "room_2"],
         additionalProperties: false,
       },
     },
