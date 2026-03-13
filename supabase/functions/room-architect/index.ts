@@ -1,3 +1,4 @@
+//@ts-ignore
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
@@ -1904,7 +1905,7 @@ function connectOrPairRooms(
     }
 
     updatedRooms = normalizeRoomCoordinates(updatedRooms);
-    room1 = updatedRooms.find(r => r.id === room1.id)!;
+    room1 = updatedRooms.find(r => r.id === room1!.id)!;
     room2 = updatedRooms.find(r => r.id === movedRoom2.id)!;
     sharedWall = findSharedWall(room1, room2);
   }
@@ -2267,8 +2268,8 @@ function processFloorPlanTool(
     case "resize_room": {
       const roomId = args.room_id as string;
       const targetSqft = args.target_sqft as number;
-      const room = floorPlan.rooms.find(r => r.id === roomId);
-      if (!room) return { result: JSON.stringify({ success: false, reason: "Room not found" }), floorPlan };
+      const room = resolveRoomByRef(floorPlan.rooms, roomId);
+      if (!room) return { result: JSON.stringify({ success: false, reason: `Room not found: ${roomId}` }), floorPlan };
       if (!targetSqft || targetSqft < 20) return { result: JSON.stringify({ success: false, reason: "target_sqft must be >= 20" }), floorPlan };
 
       const currentAreaCm2 = room.width * room.height;
@@ -2280,7 +2281,7 @@ function processFloorPlanTool(
 
       const actions: string[] = [];
       let updatedRooms = [...floorPlan.rooms];
-      const roomIdx = updatedRooms.findIndex(r => r.id === roomId);
+      const roomIdx = updatedRooms.findIndex(r => r.id === room.id);
       let r = { ...updatedRooms[roomIdx] };
 
       if (freeWalls.length > 0 || !isExpanding) {
@@ -2329,7 +2330,7 @@ function processFloorPlanTool(
           deltaSize = newWidth - r.width;
         }
 
-        const roomsToShift = collectCascadeShifts(blockedWalls[pushDir], pushDir, updatedRooms, roomId);
+        const roomsToShift = collectCascadeShifts(blockedWalls[pushDir], pushDir, updatedRooms, room.id);
 
         if (pushDir === "south") {
           r.height = Math.round(targetAreaCm2 / r.width);
@@ -2395,8 +2396,8 @@ function processFloorPlanTool(
       const roomId = args.room_id as string;
       const wall = args.wall as CardinalDirection;
       const distanceCm = Math.round(args.distance_cm as number);
-      const room = floorPlan.rooms.find(r => r.id === roomId);
-      if (!room) return { result: JSON.stringify({ success: false, reason: "Room not found" }), floorPlan };
+      const room = resolveRoomByRef(floorPlan.rooms, roomId);
+      if (!room) return { result: JSON.stringify({ success: false, reason: `Room not found: ${roomId}` }), floorPlan };
       if (!wall || !["north", "south", "east", "west"].includes(wall)) {
         return { result: JSON.stringify({ success: false, reason: "wall must be north, south, east, or west" }), floorPlan };
       }
@@ -2425,7 +2426,7 @@ function processFloorPlanTool(
 
       const actions: string[] = [];
       let updatedRooms = [...floorPlan.rooms];
-      const roomIdx = updatedRooms.findIndex(r => r.id === roomId);
+      const roomIdx = updatedRooms.findIndex(r => r.id === room.id);
       let r = { ...updatedRooms[roomIdx] };
 
       // Apply the wall movement
@@ -2444,7 +2445,7 @@ function processFloorPlanTool(
       // Snap logic: if the moved wall edge is within 20cm of a neighbor's edge, snap flush
       const SNAP_THRESHOLD = 20;
       for (const other of updatedRooms) {
-        if (other.id === roomId) continue;
+        if (other.id === room.id) continue;
         if (wall === "north") {
           const otherBottom = other.y + other.height;
           const gap = Math.abs(r.y - otherBottom);
@@ -2482,7 +2483,7 @@ function processFloorPlanTool(
 
       // If blocked, cascade-shift neighbors
       if (isBlocked && isExpanding) {
-        const roomsToShift = collectCascadeShifts(blockedWalls[wall], wall, updatedRooms, roomId);
+        const roomsToShift = collectCascadeShifts(blockedWalls[wall], wall, updatedRooms, room.id);
         updatedRooms = updatedRooms.map(rm => {
           if (!roomsToShift.has(rm.id)) return rm;
           const shifted = { ...rm };
@@ -2533,10 +2534,12 @@ function processFloorPlanTool(
     case "snap_rooms_together": {
       const roomId = args.room_id as string;
       const targetRoomId = args.target_room_id as string;
-      const room = floorPlan.rooms.find(r => r.id === roomId);
-      const targetRoom = floorPlan.rooms.find(r => r.id === targetRoomId);
-      if (!room) return { result: JSON.stringify({ success: false, reason: "Room not found" }), floorPlan };
-      if (!targetRoom) return { result: JSON.stringify({ success: false, reason: "Target room not found" }), floorPlan };
+      // Use resolveRoomByRef to allow the agent to pass names if it failed to use the ID correctly
+      const room = resolveRoomByRef(floorPlan.rooms, roomId);
+      const targetRoom = resolveRoomByRef(floorPlan.rooms, targetRoomId);
+      if (!room) return { result: JSON.stringify({ success: false, reason: `Room not found for reference: ${roomId}` }), floorPlan };
+      if (!targetRoom) return { result: JSON.stringify({ success: false, reason: `Target room not found for reference: ${targetRoomId}` }), floorPlan };
+
 
       // Auto-detect the closest wall direction by comparing room centers
       const roomCenterX = room.x + room.width / 2;
@@ -2586,7 +2589,7 @@ function processFloorPlanTool(
 
       const snapActions: string[] = [`Expanded ${room.name} ${wall} wall by ${absDist}cm to meet ${targetRoom.name}`];
       let updatedRooms = [...floorPlan.rooms];
-      const roomIdx = updatedRooms.findIndex(r => r.id === roomId);
+      const roomIdx = updatedRooms.findIndex(r => r.id === room.id);
       let r = { ...updatedRooms[roomIdx] };
 
       if (wall === "north") {
@@ -2603,7 +2606,7 @@ function processFloorPlanTool(
 
       // If blocked, cascade-shift neighbors
       if (isBlocked) {
-        const roomsToShift = collectCascadeShifts(blockedWalls[wall], wall, updatedRooms, roomId);
+        const roomsToShift = collectCascadeShifts(blockedWalls[wall], wall, updatedRooms, room.id);
         updatedRooms = updatedRooms.map(rm => {
           if (!roomsToShift.has(rm.id)) return rm;
           const shifted = { ...rm };
@@ -2652,11 +2655,11 @@ function processFloorPlanTool(
 
     case "move_room": {
       const roomId = args.room_id as string;
-      const room = floorPlan.rooms.find(r => r.id === roomId);
-      if (!room) return { result: JSON.stringify({ success: false, reason: "Room not found" }), floorPlan };
+      const room = resolveRoomByRef(floorPlan.rooms, roomId);
+      if (!room) return { result: JSON.stringify({ success: false, reason: `Room not found: ${roomId}` }), floorPlan };
 
       let updatedRooms = floorPlan.rooms.map(r =>
-        r.id === roomId ? { ...r, x: Math.round(args.x as number), y: Math.round(args.y as number) } : { ...r }
+        r.id === room.id ? { ...r, x: Math.round(args.x as number), y: Math.round(args.y as number) } : { ...r }
       );
       updatedRooms = normalizeRoomCoordinates(updatedRooms);
 
@@ -2722,13 +2725,14 @@ function processFloorPlanTool(
 
     case "remove_room": {
       const roomId = args.room_id as string;
-      const room = floorPlan.rooms.find(r => r.id === roomId);
-      if (!room) return { result: JSON.stringify({ success: false, reason: "Room not found" }), floorPlan };
+      const room = resolveRoomByRef(floorPlan.rooms, roomId);
+      if (!room) return { result: JSON.stringify({ success: false, reason: `Room not found: ${roomId}` }), floorPlan };
+
       const updated = {
         ...floorPlan,
-        rooms: floorPlan.rooms.filter(r => r.id !== roomId),
-        doors: floorPlan.doors.filter(d => d.roomId1 !== roomId && d.roomId2 !== roomId),
-        windows: floorPlan.windows.filter(w => w.roomId !== roomId),
+        rooms: floorPlan.rooms.filter(r => r.id !== room.id),
+        doors: floorPlan.doors.filter(d => d.roomId1 !== room.id && d.roomId2 !== room.id),
+        windows: floorPlan.windows.filter(w => w.roomId !== room.id),
       };
       if (updated.rooms.length > 0) {
         updated.totalWidth = Math.max(...updated.rooms.map(r => r.x + r.width));
@@ -2738,10 +2742,18 @@ function processFloorPlanTool(
     }
 
     case "add_door": {
+      const r1Ref = args.room_id_1 as string;
+      const r2Ref = args.room_id_2 as string;
+      const room1 = resolveRoomByRef(floorPlan.rooms, r1Ref);
+      const room2Str = r2Ref === "exterior" ? "exterior" : resolveRoomByRef(floorPlan.rooms, r2Ref)?.id;
+      
+      if (!room1) return { result: JSON.stringify({ success: false, reason: `Room 1 not found: ${r1Ref}` }), floorPlan };
+      if (!room2Str) return { result: JSON.stringify({ success: false, reason: `Room 2 not found: ${r2Ref}` }), floorPlan };
+
       let door: FloorPlanDoor = {
         id: generateId(),
-        roomId1: args.room_id_1 as string,
-        roomId2: args.room_id_2 as string,
+        roomId1: room1.id,
+        roomId2: room2Str,
         x: Math.round(args.x as number),
         y: Math.round(args.y as number),
         width: Math.round(args.width as number),
@@ -2756,17 +2768,21 @@ function processFloorPlanTool(
     }
 
     case "add_window": {
+      const roomRef = args.room_id as string;
+      const resolvedRoom = resolveRoomByRef(floorPlan.rooms, roomRef);
+      if (!resolvedRoom) return { result: JSON.stringify({ success: false, reason: `Room not found: ${roomRef}` }), floorPlan };
+
       let win: FloorPlanWindow = {
         id: generateId(),
-        roomId: args.room_id as string,
+        roomId: resolvedRoom.id,
         x: Math.round(args.x as number),
         y: Math.round(args.y as number),
         width: Math.round(args.width as number),
         orientation: args.orientation as "horizontal" | "vertical",
         wall: args.wall as "north" | "south" | "east" | "west",
       };
-      const winRoom = floorPlan.rooms.find(r => r.id === win.roomId);
-      if (winRoom) win = snapWindowToWall(win, winRoom);
+      
+      win = snapWindowToWall(win, resolvedRoom);
       return {
         result: JSON.stringify({ success: true, window_id: win.id }),
         floorPlan: { ...floorPlan, windows: [...floorPlan.windows, win] },
@@ -3011,7 +3027,8 @@ function sseEvent(event: string, data: unknown): string {
 }
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
-serve(async (req) => {
+// @ts-ignore
+serve(async (req: any) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
