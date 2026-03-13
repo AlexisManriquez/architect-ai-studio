@@ -1581,7 +1581,7 @@ function processFloorPlanTool(
       // Auto-generate windows on exterior walls
       const windows = autoGenerateWindows(rooms);
 
-      const newPlan: FloorPlan = {
+      let newPlan: FloorPlan = {
         id: generateId(),
         name: (args.name as string) || "Floor Plan",
         totalWidth,
@@ -1591,18 +1591,26 @@ function processFloorPlanTool(
         windows,
       };
 
-      const totalSqft2 = rooms.reduce((s, r) => s + Math.round((r.width * r.height) / 929), 0);
+      // Auto-repair connectivity issues deterministically
+      const { plan: repairedPlan, repairs } = autoRepairFloorPlan(newPlan);
+      newPlan = repairedPlan;
+      if (repairs.length > 0) {
+        console.log(`Auto-repair made ${repairs.length} fixes:`, repairs);
+      }
+
+      const totalSqft2 = newPlan.rooms.reduce((s, r) => s + Math.round((r.width * r.height) / 929), 0);
       
-      // Auto-run inspection
+      // Auto-run inspection after repair
       const inspection = inspectFloorPlan(newPlan);
       
       const resultStr = JSON.stringify({
         success: true,
-        rooms: rooms.length,
-        doors: doors.length,
-        windows: windows.length,
+        rooms: newPlan.rooms.length,
+        doors: newPlan.doors.length,
+        windows: newPlan.windows.length,
         totalSqft: totalSqft2,
-        room_ids: rooms.map(r => ({ id: r.id, name: r.name })),
+        room_ids: newPlan.rooms.map(r => ({ id: r.id, name: r.name })),
+        repairs: repairs.length > 0 ? repairs : undefined,
         inspection: {
           passed: inspection.issues.length === 0,
           issues: inspection.issues,
@@ -1616,7 +1624,7 @@ function processFloorPlanTool(
       return {
         result: resultStr,
         floorPlan: newPlan,
-        action: `Generated "${newPlan.name}" — ${rooms.length} rooms, ~${totalSqft2} sqft`,
+        action: `Generated "${newPlan.name}" — ${newPlan.rooms.length} rooms, ~${totalSqft2} sqft`,
       };
     }
 
