@@ -2489,9 +2489,10 @@ ${ROOM_TYPES.join(", ")}
 1. **generate_floor_plan** — PRIMARY TOOL. Just provide bedrooms, bathrooms, sqft. The engine builds everything.
 2. **add_room** / **remove_room** / **move_room** — Fine-tune individual rooms after generation.
 3. **resize_room** — Smart resize: provide room_id + target_sqft. The engine will expand toward free walls or shift neighbors. Doors/windows are auto-regenerated. Do NOT calculate coordinates yourself.
-4. **add_door** / **add_window** — Add additional doors/windows if needed.
-5. **list_rooms** — Inspect current layout with IDs and positions.
-6. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
+4. **connect_rooms** — For adjacency/pairing requests. If rooms are not adjacent, it will move room_2 next to room_1 and shift neighbors to make space, then ensure a direct door.
+5. **add_door** / **add_window** — Add additional doors/windows if needed.
+6. **list_rooms** — Inspect current layout with IDs and positions.
+7. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
 
 ═══ SKETCH / IMAGE UPLOAD ═══
 When the user uploads a floor plan image, sketch, or blueprint:
@@ -2506,7 +2507,7 @@ When the user uploads a floor plan image, sketch, or blueprint:
 1. For text requests: Extract bedrooms/bathrooms/sqft → call **generate_floor_plan**.
 2. For image uploads: Call **generate_from_sketch** with explicit room coordinates.
 3. Review auto-inspection results.
-4. If issues exist, fix with add_door, move_room, resize_room.
+4. If issues exist, fix with connect_rooms, add_door, move_room, resize_room.
 5. Call **validate_floor_plan** to confirm.
 
 ═══ RESPONSE RULES ═══
@@ -2514,7 +2515,9 @@ When the user uploads a floor plan image, sketch, or blueprint:
 2. Be conversational and brief (1-3 sentences after executing actions).
 3. When recreating a sketch, first describe what you see, then generate using generate_from_sketch.
 4. ALWAYS call validate_floor_plan after generate_floor_plan or generate_from_sketch.
-5. For post-generation adjustments ("make the master bedroom bigger"), use resize_room with target_sqft.`;
+5. For post-generation adjustments ("make the master bedroom bigger"), use resize_room with target_sqft.
+6. For requests like "connect room A to room B" or "pair these rooms", use connect_rooms.
+7. NEVER claim a requested connection is infeasible without first trying connect_rooms and validation.`;
 }
 
 function buildRoomSystemPrompt(roomState: RoomState, roomName: string): string {
