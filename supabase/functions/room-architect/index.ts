@@ -999,6 +999,124 @@ function autoGenerateWindows(rooms: FloorPlanRoom[]): FloorPlanWindow[] {
   return windows;
 }
 
+// ─── Auto-Repair Floor Plan ─────────────────────────────────────────────────
+/**
+ * Deterministic auto-repair: fix connectivity issues by inserting missing doors.
+ * This prevents the AI from wasting iterations trying to fix structural issues.
+ */
+function autoRepairFloorPlan(plan: FloorPlan): { plan: FloorPlan; repairs: string[] } {
+  const repairs: string[] = [];
+  let { rooms, doors, windows } = plan;
+
+  // 1. Build adjacency from existing doors
+  const adjacency: Record<string, Set<string>> = {};
+  for (const r of rooms) adjacency[r.id] = new Set();
+  adjacency["exterior"] = new Set();
+  for (const door of doors) {
+    if (adjacency[door.roomId1]) adjacency[door.roomId1].add(door.roomId2);
+    if (adjacency[door.roomId2]) adjacency[door.roomId2].add(door.roomId1);
+  }
+
+  // 2. Find entry points
+  const entryRooms = rooms.filter(r => r.type === "entry");
+  const roomsWithExteriorDoor = new Set(
+    doors.filter(d => d.roomId1 === "exterior" || d.roomId2 === "exterior")
+      .map(d => d.roomId1 === "exterior" ? d.roomId2 : d.roomId1)
+  );
+  const startNodes = new Set<string>();
+  entryRooms.forEach(r => startNodes.add(r.id));
+  roomsWithExteriorDoor.forEach(id => startNodes.add(id));
+
+  // 3. If no entry points, create an exterior door on the first room that touches the top edge
+  if (startNodes.size === 0) {
+    const topRooms = rooms.filter(r => r.y <= 2);
+    const entryCandidate = topRooms.find(r => r.type === "entry" || r.type === "living-room" || r.type === "hallway") || topRooms[0] || rooms[0];
+    if (entryCandidate) {
+      const extDoor: FloorPlanDoor = {
+        id: generateId(),
+        roomId1: entryCandidate.id,
+        roomId2: "exterior",
+        x: Math.round(entryCandidate.x + entryCandidate.width / 2 - 45),
+        y: entryCandidate.y,
+        width: 90,
+        orientation: "horizontal",
+      };
+      doors = [...doors, extDoor];
+      startNodes.add(entryCandidate.id);
+      if (adjacency[entryCandidate.id]) adjacency[entryCandidate.id].add("exterior");
+      repairs.push(`Added exterior door to "${entryCandidate.name}"`);
+    }
+  }
+
+  // 4. BFS to find reachable rooms
+  const visited = new Set<string>();
+  const queue = [...startNodes];
+  queue.forEach(id => visited.add(id));
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const neighbor of (adjacency[current] || [])) {
+      if (neighbor !== "exterior" && !visited.has(neighbor)) {
+        visited.add(neighbor);
+        queue.push(neighbor);
+      }
+    }
+  }
+
+  // 5. For each unreachable room, find a reachable neighbor that shares a wall and add a door
+  let madeProgress = true;
+  let passes = 0;
+  while (madeProgress && passes < 10) {
+    madeProgress = false;
+    passes++;
+    for (const room of rooms) {
+      if (visited.has(room.id)) continue;
+      // Find a reachable room that shares a wall
+      for (const other of rooms) {
+        if (!visited.has(other.id)) continue;
+        const wall = findSharedWall(room, other);
+        if (!wall) continue;
+        // Add a door on this shared wall
+        const doorWidth = 90;
+        let newDoor: FloorPlanDoor;
+        if (wall.orientation === "horizontal") {
+          const cx = wall.x + wall.length / 2;
+          newDoor = {
+            id: generateId(),
+            roomId1: room.id,
+            roomId2: other.id,
+            x: Math.round(cx - doorWidth / 2),
+            y: Math.round(wall.y),
+            width: doorWidth,
+            orientation: "horizontal",
+          };
+        } else {
+          const cy = wall.y + wall.length / 2;
+          newDoor = {
+            id: generateId(),
+            roomId1: room.id,
+            roomId2: other.id,
+            x: Math.round(wall.x),
+            y: Math.round(cy - doorWidth / 2),
+            width: doorWidth,
+            orientation: "vertical",
+          };
+        }
+        doors = [...doors, newDoor];
+        visited.add(room.id);
+        queue.push(room.id);
+        repairs.push(`Connected "${room.name}" to "${other.name}" via auto-generated door`);
+        madeProgress = true;
+        break;
+      }
+    }
+  }
+
+  return {
+    plan: { ...plan, doors, windows },
+    repairs,
+  };
+}
+
 // ─── Floor Plan Tools ───────────────────────────────────────────────────────
 const floorPlanTools = [
   {
