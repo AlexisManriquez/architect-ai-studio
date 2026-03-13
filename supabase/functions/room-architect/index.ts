@@ -531,16 +531,47 @@ function generateProceduralLayout(
   }
 
   // ── 5. Distribute rooms into left and right wings ──
+  // ARCHITECTURAL RULE: Master bedroom + master bathroom must be in the SAME wing (en-suite).
+  // Other bedrooms pair with remaining bathrooms when possible.
   const leftWing: RoomReq[] = [];
   const rightWing: RoomReq[] = [];
   let leftWeight = 0;
   // Kitchen/Dining always go to right wing (touching living area below)
   let rightWeight = kitchenDiningReqs.reduce((s, r) => s + r.weight, 0);
 
-  // Balance remaining private rooms between wings
-  for (const room of privateReqs) {
+  // Identify master suite (master bedroom + master bathroom)
+  const masterBedIdx = privateReqs.findIndex(r => r.name.toLowerCase().includes("master") && r.type === "bedroom");
+  const masterBathIdx = privateReqs.findIndex(r => r.name.toLowerCase().includes("master") && r.type === "bathroom");
+
+  // Build paired groups: master suite first, then remaining rooms
+  const pairedGroups: RoomReq[][] = [];
+  const usedIndices = new Set<number>();
+
+  if (masterBedIdx >= 0 && masterBathIdx >= 0) {
+    pairedGroups.push([privateReqs[masterBedIdx], privateReqs[masterBathIdx]]);
+    usedIndices.add(masterBedIdx);
+    usedIndices.add(masterBathIdx);
+  }
+
+  // Remaining rooms as individual entries
+  const remainingPrivate = privateReqs.filter((_, i) => !usedIndices.has(i));
+
+  // Place master suite first (as a group — both go to the same wing)
+  for (const group of pairedGroups) {
+    const groupWeight = group.reduce((s, r) => s + r.weight, 0);
     if (leftWeight <= rightWeight) {
-      leftWing.unshift(room); // unshift puts rooms toward back of house
+      for (const room of group) leftWing.unshift(room);
+      leftWeight += groupWeight;
+    } else {
+      for (const room of group) rightWing.unshift(room);
+      rightWeight += groupWeight;
+    }
+  }
+
+  // Balance remaining private rooms between wings
+  for (const room of remainingPrivate) {
+    if (leftWeight <= rightWeight) {
+      leftWing.unshift(room);
       leftWeight += room.weight;
     } else {
       rightWing.unshift(room);
