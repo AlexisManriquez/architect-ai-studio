@@ -1615,21 +1615,89 @@ function connectOrPairRooms(
   let sharedWall = findSharedWall(room1, room2);
 
   if (!sharedWall) {
+    const room2Area = room2.width * room2.height;
+
+    // Helper: compute best dimensions for room2 on a given side of room1
+    function bestFitForSide(side: CardinalDirection, r1: FloorPlanRoom, origW: number, origH: number, area: number): { w: number; h: number; rotated: boolean; reshaped: boolean } {
+      const isHorizontal = side === "east" || side === "west";
+      // The "wall length" room2 should match is room1's height (for east/west) or width (for north/south)
+      const wallLen = isHorizontal ? r1.height : r1.width;
+
+      // Option 1: original orientation
+      const opt1_along = isHorizontal ? origH : origW;  // dimension along the shared wall
+      const opt1_perp = isHorizontal ? origW : origH;
+
+      // Option 2: rotated (swap w/h)
+      const opt2_along = isHorizontal ? origW : origH;
+      const opt2_perp = isHorizontal ? origH : origW;
+
+      // Option 3: reshaped to match wall length exactly (preserve area)
+      const opt3_along = wallLen;
+      const opt3_perp = Math.round(area / wallLen);
+
+      // Score: lower is better. Prefer matching the wall length closely.
+      function score(along: number, perp: number): number {
+        const wallFit = Math.abs(along - wallLen); // 0 = perfect match
+        const aspectRatio = Math.max(along, perp) / Math.max(1, Math.min(along, perp));
+        // Penalize extreme aspect ratios (> 3:1)
+        const aspectPenalty = aspectRatio > 3 ? (aspectRatio - 3) * 500 : 0;
+        // Penalize if room2 is longer than room1's wall (overhang)
+        const overhangPenalty = along > wallLen ? (along - wallLen) * 2 : 0;
+        return wallFit + overhangPenalty + aspectPenalty;
+      }
+
+      const s1 = score(opt1_along, opt1_perp);
+      const s2 = score(opt2_along, opt2_perp);
+      const s3 = score(opt3_along, opt3_perp);
+      // Only use reshape if it's meaningfully better and aspect ratio is reasonable
+      const opt3Aspect = Math.max(opt3_along, opt3_perp) / Math.max(1, Math.min(opt3_along, opt3_perp));
+
+      if (s3 < s1 && s3 < s2 && opt3_perp >= 120 && opt3Aspect <= 3) {
+        return isHorizontal
+          ? { w: opt3_perp, h: opt3_along, rotated: false, reshaped: true }
+          : { w: opt3_along, h: opt3_perp, rotated: false, reshaped: true };
+      }
+      if (s2 < s1) {
+        return isHorizontal
+          ? { w: opt2_perp, h: opt2_along, rotated: true, reshaped: false }
+          : { w: opt2_along, h: opt2_perp, rotated: true, reshaped: false };
+      }
+      return { w: origW, h: origH, rotated: false, reshaped: false };
+    }
+
     const sideOrder: CardinalDirection[] = preferredSide
       ? [preferredSide, "west", "east", "south", "north"].filter((v, i, arr) => arr.indexOf(v as CardinalDirection) === i) as CardinalDirection[]
       : ["west", "east", "south", "north"];
 
-    const costs = sideOrder.map(side => {
+    // Score each side considering blockers AND fit quality
+    const candidates = sideOrder.map(side => {
       const blockers = getRoomsTouchingSide(room1!, updatedRooms.filter(r => r.id !== room1!.id && r.id !== room2!.id), side);
-      const blockerArea = blockers.reduce((s, r) => s + r.width * r.height, 0);
-      return { side, blockers, cost: blockers.length * 1000 + blockerArea };
+      const blockerCost = blockers.reduce((s, r) => s + r.width * r.height, 0) + blockers.length * 1000;
+      const fit = bestFitForSide(side, room1!, room2!.width, room2!.height, room2Area);
+      const isHorizontal = side === "east" || side === "west";
+      const wallLen = isHorizontal ? room1!.height : room1!.width;
+      const fitAlong = isHorizontal ? fit.h : fit.w;
+      const overhang = Math.max(0, fitAlong - wallLen);
+      const fitCost = overhang * 2 + (fit.reshaped ? 50 : 0); // slight penalty for reshaping
+      return { side, blockers, fit, cost: blockerCost + fitCost };
     }).sort((a, b) => a.cost - b.cost);
 
-    const chosen = costs[0];
+    const chosen = candidates[0];
     const moveSide = chosen.side;
+    const fitResult = chosen.fit;
+
+    // Apply rotation/reshape to room2
+    if (fitResult.reshaped) {
+      updatedRooms = updatedRooms.map(r => r.id === room2!.id ? { ...r, width: fitResult.w, height: fitResult.h } : r);
+      actions.push(`Reshaped "${room2.name}" to ${fitResult.w / 100}m × ${fitResult.h / 100}m to fit alongside "${room1.name}"`);
+    } else if (fitResult.rotated) {
+      updatedRooms = updatedRooms.map(r => r.id === room2!.id ? { ...r, width: fitResult.w, height: fitResult.h } : r);
+      actions.push(`Rotated "${room2.name}" to ${fitResult.w / 100}m × ${fitResult.h / 100}m for better fit`);
+    }
 
     // Shift blockers in cascade to make space for pairing
-    const shiftDelta = (moveSide === "east" || moveSide === "west") ? room2.width : room2.height;
+    const r2now = updatedRooms.find(r => r.id === room2!.id)!;
+    const shiftDelta = (moveSide === "east" || moveSide === "west") ? r2now.width : r2now.height;
     if (chosen.blockers.length > 0) {
       updatedRooms = cascadeShiftRooms(
         updatedRooms,
@@ -1644,7 +1712,7 @@ function connectOrPairRooms(
     room1 = updatedRooms.find(r => r.id === room1!.id)!;
     const movedRoom2 = updatedRooms.find(r => r.id === room2!.id)!;
 
-    // Place room2 directly adjacent to room1
+    // Place room2 directly adjacent to room1, aligned to room1's edge
     let nx = movedRoom2.x;
     let ny = movedRoom2.y;
     if (moveSide === "west") {
