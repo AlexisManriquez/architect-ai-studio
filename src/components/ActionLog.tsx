@@ -26,7 +26,7 @@ export default function ActionLog({ actions }: ActionLogProps) {
   if (visible.length === 0) return null;
 
   return (
-    <div className="absolute top-4 right-4 flex flex-col gap-1.5 z-10 max-w-[280px]">
+    <div className="absolute top-4 right-4 flex flex-col gap-1.5 z-10 max-w-[280px] pointer-events-none">
       <AnimatePresence>
         {visible.map((action) => (
           <motion.div
