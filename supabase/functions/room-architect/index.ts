@@ -2946,8 +2946,8 @@ IMPORTANT: You are receiving SYNTHESIZED INSTRUCTIONS from a Supervisor. The Sup
 ═══ TOOLS ═══
 - **snap_rooms_together(room_id, target_room_id)** — Expands a room's wall to meet another room to close a gap. USE THIS if instructed to expand one room to another.
 - **connect_rooms(room_1_id, room_2_id)** — Relocates/moves room_2 adjacent to room_1.
-- **reshape_room_boundary(room_id, wall, distance_cm)** — Moves a specific wall by an exact distance. USE THIS if instructed to push/pull a specific wall.
-- **resize_room(room_id, target_sqft)** — Resizes a room randomly outward/inward based on square footage.
+- **reshape_room_boundary(room_id, wall, distance_cm)** — Moves a specific wall by an exact distance. USE THIS if instructed to push, pull, or drag a specific wall. Call it MULTIPLE TIMES sequentially if the Supervisor says multiple rooms need their walls moved. ONLY use this for wall moving!
+- **resize_room(room_id, target_sqft)** — Resizes a room randomly outward/inward based on square footage. NEVER use this if the user wants to drag or push a specific wall! 
 - **move_room** — Relocates to an absolute coordinate. Do NOT use this to expand a room.
 
 Execute the tool that best aligns with the Supervisor's instructions, then ALWAYS call validate_floor_plan. Be conversational and brief in your text response.
@@ -2966,7 +2966,7 @@ Your ONLY job is to analyze the user's intent (and any RED PENCIL VISUAL ANNOTAT
 
 ═══ VISUAL ANNOTATIONS (RED PENCIL) ═══
 - Red arrow from room A to room B → User wants room A expanded to touch room B.
-- Red arrow from a wall into empty space → User wants to expand that wall outward.
+- Red arrow or line on specific wall(s) → User wants to push/pull those exact walls. If a line spans MULTIPLE rooms (e.g., west walls of bedrooms and bathrooms), you MUST name ALL THOSE ROOMS in your instruction. Example: "Expand the west walls of bedroom-3, master-bathroom, and master-bedroom by 150cm using reshape_room_boundary for each." Estimate the distance_cm yourself. NEVER suggest resize_room for wall pulling.
 - Scribble/X over a room → User wants to delete the room.
 
 If you see an annotation, prioritize it over vague text. 
@@ -3043,6 +3043,7 @@ serve(async (req: any) => {
     }
 
     const userApiKey = req.headers.get("x-user-api-key");
+    //@ts-ignore
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     const useDirectGemini = !!userApiKey;
     if (!useDirectGemini && !LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
