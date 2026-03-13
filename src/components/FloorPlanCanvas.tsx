@@ -3,7 +3,7 @@ import type { FloorPlan, FloorPlanRoom } from "@/types/floorplan";
 import { ROOM_TYPE_COLORS, ROOM_TYPE_LABELS } from "@/types/floorplan";
 import ActionLog, { type ActionEntry } from "@/components/ActionLog";
 import { useAppContext } from "@/context/AppContext";
-import { Pencil, Eraser } from "lucide-react";
+import { Pencil, Eraser, MousePointer2 } from "lucide-react";
 
 interface FloorPlanCanvasProps {
   floorPlan: FloorPlan;
@@ -18,10 +18,15 @@ export interface FloorPlanCanvasHandle {
 const WALL_THICKNESS = 8;
 const INNER_WALL = 4;
 const PADDING = 60;
-const SNAP_GRID = 10; // snap to nearest 10cm
+const SNAP_GRID = 10;
 
 function snapTo(value: number, grid: number): number {
   return Math.round(value / grid) * grid;
+}
+
+interface Annotation {
+  id: string;
+  points: { x: number; y: number }[];
 }
 
 const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
@@ -39,12 +44,19 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
     const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
     const didDragRef = useRef(false);
 
+    // Annotation/drawing state
+    const [drawMode, setDrawMode] = useState(false);
+    const [annotations, setAnnotations] = useState<Annotation[]>([]);
+    const [isDrawing, setIsDrawing] = useState(false);
+    const currentStrokeRef = useRef<{ x: number; y: number }[]>([]);
+
     const { updateRoomPosition, setFloorPlan } = useAppContext();
 
     useImperativeHandle(ref, () => ({
       getSvgElement: () => svgRef.current,
     }));
 
+    // Auto-fit on mount/resize
     useEffect(() => {
       if (draggingRoomId) return;
       if (!containerRef.current || floorPlan.totalWidth === 0) return;
@@ -65,15 +77,40 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
       setScale((s) => Math.max(0.2, Math.min(3, s * delta)));
     }, []);
 
+    // Convert screen coords to canvas coords
+    const screenToCanvas = useCallback((clientX: number, clientY: number) => {
+      return {
+        x: (clientX - offset.x) / scale,
+        y: (clientY - offset.y) / scale,
+      };
+    }, [offset, scale]);
+
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
+      if (drawMode) {
+        // Start drawing
+        const pt = screenToCanvas(e.clientX, e.clientY);
+        currentStrokeRef.current = [pt];
+        setIsDrawing(true);
+        return;
+      }
       if (draggingRoomId) return;
       if (e.button === 0 || e.button === 1) {
         setIsPanning(true);
         setPanStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
       }
-    }, [offset, draggingRoomId]);
+    }, [offset, draggingRoomId, drawMode, screenToCanvas]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
+      if (drawMode && isDrawing) {
+        const pt = screenToCanvas(e.clientX, e.clientY);
+        currentStrokeRef.current.push(pt);
+        // Force re-render by updating annotations with a temporary in-progress stroke
+        setAnnotations(prev => {
+          const withoutCurrent = prev.filter(a => a.id !== "__drawing__");
+          return [...withoutCurrent, { id: "__drawing__", points: [...currentStrokeRef.current] }];
+        });
+        return;
+      }
       if (draggingRoomId) {
         didDragRef.current = true;
         const rawX = (e.clientX - offset.x) / scale - dragOffset.x;
@@ -90,9 +127,24 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
       }
       if (!isPanning) return;
       setOffset({ x: e.clientX - panStart.x, y: e.clientY - panStart.y });
-    }, [isPanning, panStart, draggingRoomId, dragOffset, offset, scale, setFloorPlan]);
+    }, [isPanning, panStart, draggingRoomId, dragOffset, offset, scale, setFloorPlan, drawMode, isDrawing, screenToCanvas]);
 
     const handleMouseUp = useCallback(() => {
+      if (drawMode && isDrawing) {
+        setIsDrawing(false);
+        const points = currentStrokeRef.current;
+        if (points.length > 1) {
+          setAnnotations(prev => {
+            const withoutTemp = prev.filter(a => a.id !== "__drawing__");
+            return [...withoutTemp, { id: crypto.randomUUID().slice(0, 8), points }];
+          });
+        } else {
+          // Remove temp stroke if too short
+          setAnnotations(prev => prev.filter(a => a.id !== "__drawing__"));
+        }
+        currentStrokeRef.current = [];
+        return;
+      }
       if (draggingRoomId) {
         const room = floorPlan.rooms.find(r => r.id === draggingRoomId);
         if (room) {
@@ -101,25 +153,31 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
         setDraggingRoomId(null);
       }
       setIsPanning(false);
-    }, [draggingRoomId, floorPlan.rooms, updateRoomPosition]);
+    }, [draggingRoomId, floorPlan.rooms, updateRoomPosition, drawMode, isDrawing]);
 
     const handleRoomMouseDown = useCallback((e: React.MouseEvent, room: FloorPlanRoom) => {
+      if (drawMode) return; // don't drag rooms while drawing
       e.stopPropagation();
       didDragRef.current = false;
       const roomX = (e.clientX - offset.x) / scale - room.x;
       const roomY = (e.clientY - offset.y) / scale - room.y;
       setDragOffset({ x: roomX, y: roomY });
       setDraggingRoomId(room.id);
-    }, [offset, scale]);
+    }, [offset, scale, drawMode]);
 
     const handleRoomClick = useCallback((e: React.MouseEvent, room: FloorPlanRoom) => {
+      if (drawMode) return;
       if (!didDragRef.current) {
         e.stopPropagation();
         onEnterRoom(room);
       }
-    }, [onEnterRoom]);
+    }, [onEnterRoom, drawMode]);
 
-    // Check if a wall is shared with another room (for internal walls)
+    const clearAnnotations = useCallback(() => {
+      setAnnotations([]);
+    }, []);
+
+    // Check if a wall is shared with another room
     const isSharedWall = useCallback((room: FloorPlanRoom, side: "north" | "south" | "east" | "west") => {
       return floorPlan.rooms.some(other => {
         if (other.id === room.id) return false;
@@ -131,6 +189,11 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
         }
       });
     }, [floorPlan.rooms]);
+
+    const pointsToPath = (points: { x: number; y: number }[]) => {
+      if (points.length < 2) return "";
+      return points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+    };
 
     const renderRoom = (room: FloorPlanRoom) => {
       const isHovered = hoveredRoom === room.id;
@@ -145,100 +208,43 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
           key={room.id}
           onMouseDown={(e) => handleRoomMouseDown(e, room)}
           onClick={(e) => handleRoomClick(e, room)}
-          onMouseEnter={() => setHoveredRoom(room.id)}
+          onMouseEnter={() => !drawMode && setHoveredRoom(room.id)}
           onMouseLeave={() => setHoveredRoom(null)}
-          style={{ cursor: isDragging ? "grabbing" : "grab" }}
+          style={{ cursor: drawMode ? "crosshair" : isDragging ? "grabbing" : "grab" }}
           opacity={isDragging ? 0.7 : 1}
         >
-          {/* Room fill */}
-          <rect
-            x={room.x}
-            y={room.y}
-            width={room.width}
-            height={room.height}
-            fill={`hsl(${color})`}
-            opacity={isHovered ? 1 : 0.85}
-          />
-
-          {/* Drag outline */}
+          <rect x={room.x} y={room.y} width={room.width} height={room.height}
+            fill={`hsl(${color})`} opacity={isHovered ? 1 : 0.85} />
           {isDragging && (
-            <rect
-              x={room.x - 3}
-              y={room.y - 3}
-              width={room.width + 6}
-              height={room.height + 6}
-              fill="none"
-              stroke="hsl(var(--primary))"
-              strokeWidth={2}
-              strokeDasharray="6 3"
-              rx={4}
-            />
+            <rect x={room.x - 3} y={room.y - 3} width={room.width + 6} height={room.height + 6}
+              fill="none" stroke="hsl(var(--primary))" strokeWidth={2} strokeDasharray="6 3" rx={4} />
           )}
-
-          {/* Internal walls — draw thinner lines for shared walls */}
           {(["north", "south", "east", "west"] as const).map(side => {
             if (!isSharedWall(room, side)) return null;
             const key = `${room.id}-wall-${side}`;
             switch (side) {
-              case "north":
-                return <line key={key} x1={room.x} y1={room.y} x2={room.x + room.width} y2={room.y} stroke="hsl(var(--foreground))" strokeWidth={INNER_WALL} />;
-              case "south":
-                return <line key={key} x1={room.x} y1={room.y + room.height} x2={room.x + room.width} y2={room.y + room.height} stroke="hsl(var(--foreground))" strokeWidth={INNER_WALL} />;
-              case "west":
-                return <line key={key} x1={room.x} y1={room.y} x2={room.x} y2={room.y + room.height} stroke="hsl(var(--foreground))" strokeWidth={INNER_WALL} />;
-              case "east":
-                return <line key={key} x1={room.x + room.width} y1={room.y} x2={room.x + room.width} y2={room.y + room.height} stroke="hsl(var(--foreground))" strokeWidth={INNER_WALL} />;
+              case "north": return <line key={key} x1={room.x} y1={room.y} x2={room.x + room.width} y2={room.y} stroke="hsl(var(--foreground))" strokeWidth={INNER_WALL} />;
+              case "south": return <line key={key} x1={room.x} y1={room.y + room.height} x2={room.x + room.width} y2={room.y + room.height} stroke="hsl(var(--foreground))" strokeWidth={INNER_WALL} />;
+              case "west": return <line key={key} x1={room.x} y1={room.y} x2={room.x} y2={room.y + room.height} stroke="hsl(var(--foreground))" strokeWidth={INNER_WALL} />;
+              case "east": return <line key={key} x1={room.x + room.width} y1={room.y} x2={room.x + room.width} y2={room.y + room.height} stroke="hsl(var(--foreground))" strokeWidth={INNER_WALL} />;
             }
           })}
-
-          {/* Room label */}
-          <text
-            x={room.x + room.width / 2}
-            y={room.y + room.height / 2 - fontSize * 0.8}
-            textAnchor="middle"
-            dominantBaseline="central"
-            fill="hsl(var(--foreground))"
-            fontSize={fontSize}
-            fontWeight={700}
-            style={{ pointerEvents: "none", userSelect: "none" }}
-          >
-            {label}
-          </text>
-          {/* Dimensions */}
-          <text
-            x={room.x + room.width / 2}
-            y={room.y + room.height / 2 + fontSize * 0.4}
-            textAnchor="middle"
-            dominantBaseline="central"
-            fill="hsl(var(--muted-foreground))"
-            fontSize={Math.max(7, fontSize * 0.75)}
-            style={{ pointerEvents: "none", userSelect: "none" }}
-          >
+          <text x={room.x + room.width / 2} y={room.y + room.height / 2 - fontSize * 0.8}
+            textAnchor="middle" dominantBaseline="central" fill="hsl(var(--foreground))"
+            fontSize={fontSize} fontWeight={700} style={{ pointerEvents: "none", userSelect: "none" }}>{label}</text>
+          <text x={room.x + room.width / 2} y={room.y + room.height / 2 + fontSize * 0.4}
+            textAnchor="middle" dominantBaseline="central" fill="hsl(var(--muted-foreground))"
+            fontSize={Math.max(7, fontSize * 0.75)} style={{ pointerEvents: "none", userSelect: "none" }}>
             {(room.width / 100).toFixed(1)}m × {(room.height / 100).toFixed(1)}m
           </text>
-          {/* Sqft */}
-          <text
-            x={room.x + room.width / 2}
-            y={room.y + room.height / 2 + fontSize * 1.4}
-            textAnchor="middle"
-            dominantBaseline="central"
-            fill="hsl(var(--muted-foreground))"
-            fontSize={Math.max(6, fontSize * 0.65)}
-            style={{ pointerEvents: "none", userSelect: "none" }}
-          >
+          <text x={room.x + room.width / 2} y={room.y + room.height / 2 + fontSize * 1.4}
+            textAnchor="middle" dominantBaseline="central" fill="hsl(var(--muted-foreground))"
+            fontSize={Math.max(6, fontSize * 0.65)} style={{ pointerEvents: "none", userSelect: "none" }}>
             ~{sqft} sqft
           </text>
-          {/* Hover overlay */}
           {isHovered && !isDragging && (
-            <rect
-              x={room.x}
-              y={room.y}
-              width={room.width}
-              height={room.height}
-              fill="hsl(var(--primary))"
-              opacity={0.12}
-              style={{ pointerEvents: "none" }}
-            />
+            <rect x={room.x} y={room.y} width={room.width} height={room.height}
+              fill="hsl(var(--primary))" opacity={0.12} style={{ pointerEvents: "none" }} />
           )}
         </g>
       );
@@ -335,7 +341,7 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
       <div
         ref={containerRef}
         className="flex-1 bg-background overflow-hidden relative"
-        style={{ cursor: draggingRoomId ? "grabbing" : isPanning ? "grabbing" : "grab" }}
+        style={{ cursor: drawMode ? "crosshair" : draggingRoomId ? "grabbing" : isPanning ? "grabbing" : "grab" }}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -354,11 +360,51 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
           )}
         </div>
 
+        {/* Drawing tools toolbar */}
+        <div className="absolute top-3 right-14 z-10 flex gap-1">
+          <button
+            onClick={() => setDrawMode(!drawMode)}
+            className={`w-9 h-9 rounded-md border flex items-center justify-center transition-colors ${
+              drawMode
+                ? "bg-primary text-primary-foreground border-primary shadow-md"
+                : "bg-card/90 backdrop-blur-sm border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            }`}
+            title={drawMode ? "Switch to pointer mode" : "Draw annotations (mark where to place windows/doors)"}
+          >
+            {drawMode ? <Pencil className="w-4 h-4" /> : <Pencil className="w-4 h-4" />}
+          </button>
+          {annotations.length > 0 && (
+            <button
+              onClick={clearAnnotations}
+              className="w-9 h-9 rounded-md bg-card/90 backdrop-blur-sm border border-border flex items-center justify-center text-muted-foreground hover:bg-destructive hover:text-destructive-foreground transition-colors"
+              title="Clear all annotations"
+            >
+              <Eraser className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Draw mode indicator */}
+        {drawMode && (
+          <div className="absolute top-14 right-14 z-10">
+            <div className="bg-primary/90 backdrop-blur-sm text-primary-foreground rounded-md px-3 py-1.5 text-xs font-medium shadow-md">
+              ✏️ Drawing mode — mark walls for windows/doors
+            </div>
+          </div>
+        )}
+
         {/* Hint */}
-        {floorPlan.rooms.length > 0 && (
+        {floorPlan.rooms.length > 0 && !drawMode && (
           <div className="absolute bottom-12 left-3 z-10">
             <div className="bg-card/90 backdrop-blur-sm border border-border rounded-md px-3 py-1.5 text-xs text-muted-foreground">
-              Drag rooms to reposition · Double-click to enter & furnish
+              Drag rooms to reposition · Double-click to enter & furnish · ✏️ Pencil to mark windows/doors
+            </div>
+          </div>
+        )}
+        {drawMode && (
+          <div className="absolute bottom-12 left-3 z-10">
+            <div className="bg-primary/10 backdrop-blur-sm border border-primary/30 rounded-md px-3 py-1.5 text-xs text-foreground">
+              Draw on walls to mark where you want windows or doors, then describe in chat
             </div>
           </div>
         )}
@@ -371,6 +417,22 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
             {renderOuterWalls()}
             {floorPlan.doors.map(renderDoor)}
             {floorPlan.windows.map(renderWindow)}
+
+            {/* Render annotations */}
+            {annotations.map(annotation => (
+              <path
+                key={annotation.id}
+                d={pointsToPath(annotation.points)}
+                fill="none"
+                stroke="hsl(0 90% 55%)"
+                strokeWidth={4 / scale}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity={0.85}
+                style={{ pointerEvents: "none" }}
+              />
+            ))}
+
             {floorPlan.rooms.length > 0 && (
               <text x={floorPlan.totalWidth / 2} y={floorPlan.totalHeight + 30}
                 textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize={12}>
