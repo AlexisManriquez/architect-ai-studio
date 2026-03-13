@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(grep -v \"^ui$\")"
+      "Bash(grep -v \"^ui$\")",
+      "Bash(npx vite:*)"
     ]
   }
 }

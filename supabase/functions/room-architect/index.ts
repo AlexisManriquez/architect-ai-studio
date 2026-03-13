@@ -1120,22 +1120,26 @@ Do NOT provide raw coordinates — just the room_id and target_sqft.`,
     type: "function",
     function: {
       name: "reshape_room_boundary",
-      description: `Move a specific wall of a room by a given distance. Use this for directional wall manipulation — e.g., "pull the north wall up by 150cm" or "push the east wall out by 200cm".
-- Positive distance_cm = expand outward (wall moves away from room center).
-- Negative distance_cm = contract inward (wall moves toward room center).
+      description: `Move a specific wall of a room. PREFERRED for all directional wall changes and "expand room to meet another room" requests.
+
+TWO MODES:
+1. **target_room_id mode (PREFERRED)**: Provide room_id + wall + target_room_id. The system auto-calculates the exact distance to make the wall meet the target room. Example: "expand garage north wall to master bedroom" → reshape_room_boundary(garage_id, "north", target_room_id=master_bedroom_id). The gap is closed automatically — no distance calculation needed.
+2. **distance mode**: Provide room_id + wall + distance_cm. Positive = expand outward, negative = contract inward.
+
+ALWAYS prefer target_room_id when the user wants to expand one room to meet/touch another room. This guarantees pixel-perfect alignment.
 - If the wall has adjacent rooms, they will be cascade-shifted to make space.
 - Doors and windows are auto-regenerated after reshaping.
-- Nearby room edges within 20cm are auto-snapped flush to prevent small gaps.
-- Minimum room dimension: 120cm on any axis.
-Use this when the user draws arrows on a specific wall, or says things like "expand the bedroom to the right by 2 meters" or "shrink the kitchen on the west side".`,
+- Nearby room edges within 20cm are auto-snapped flush.
+- Minimum room dimension: 120cm on any axis.`,
       parameters: {
         type: "object",
         properties: {
           room_id: { type: "string", description: "ID of the room whose wall to move" },
           wall: { type: "string", enum: ["north", "south", "east", "west"], description: "Which wall to move" },
-          distance_cm: { type: "number", description: "Distance to move the wall in cm. Positive = expand outward, negative = contract inward. E.g., 150 means expand 150cm, -100 means shrink 100cm." },
+          distance_cm: { type: "number", description: "Distance in cm. Positive = expand, negative = contract. OMIT this if using target_room_id." },
+          target_room_id: { type: "string", description: "ID of the room to expand toward. The wall will move exactly to meet this room's nearest edge. PREFERRED over distance_cm for 'expand to meet' requests." },
         },
-        required: ["room_id", "wall", "distance_cm"],
+        required: ["room_id", "wall"],
         additionalProperties: false,
       },
     },
@@ -2352,14 +2356,56 @@ function processFloorPlanTool(
     case "reshape_room_boundary": {
       const roomId = args.room_id as string;
       const wall = args.wall as CardinalDirection;
-      const distanceCm = Math.round(args.distance_cm as number);
+      const targetRoomId = args.target_room_id as string | undefined;
       const room = floorPlan.rooms.find(r => r.id === roomId);
       if (!room) return { result: JSON.stringify({ success: false, reason: "Room not found" }), floorPlan };
       if (!wall || !["north", "south", "east", "west"].includes(wall)) {
         return { result: JSON.stringify({ success: false, reason: "wall must be north, south, east, or west" }), floorPlan };
       }
-      if (!distanceCm || distanceCm === 0) {
-        return { result: JSON.stringify({ success: false, reason: "distance_cm must be non-zero" }), floorPlan };
+
+      // Auto-calculate distance when target_room_id is provided
+      let distanceCm: number;
+      if (targetRoomId) {
+        const targetRoom = floorPlan.rooms.find(r => r.id === targetRoomId);
+        if (!targetRoom) return { result: JSON.stringify({ success: false, reason: "Target room not found" }), floorPlan };
+        // Calculate the gap between this room's wall and the target room's nearest edge
+        if (wall === "north") {
+          // Room's north wall is at room.y; target's south edge is at targetRoom.y + targetRoom.height
+          const targetEdge = targetRoom.y + targetRoom.height;
+          distanceCm = Math.round(room.y - targetEdge); // gap to close
+        } else if (wall === "south") {
+          // Room's south wall is at room.y + room.height; target's north edge is at targetRoom.y
+          const targetEdge = targetRoom.y;
+          distanceCm = Math.round(targetEdge - (room.y + room.height)); // gap to close
+        } else if (wall === "west") {
+          // Room's west wall is at room.x; target's east edge is at targetRoom.x + targetRoom.width
+          const targetEdge = targetRoom.x + targetRoom.width;
+          distanceCm = Math.round(room.x - targetEdge); // gap to close
+        } else { // east
+          // Room's east wall is at room.x + room.width; target's west edge is at targetRoom.x
+          const targetEdge = targetRoom.x;
+          distanceCm = Math.round(targetEdge - (room.x + room.width)); // gap to close
+        }
+        if (distanceCm <= 0) {
+          // Rooms already overlap or are adjacent — try the other edge of target room
+          if (wall === "north") {
+            distanceCm = Math.round(room.y - targetRoom.y); // expand to target's north edge
+          } else if (wall === "south") {
+            distanceCm = Math.round((targetRoom.y + targetRoom.height) - (room.y + room.height));
+          } else if (wall === "west") {
+            distanceCm = Math.round(room.x - targetRoom.x);
+          } else {
+            distanceCm = Math.round((targetRoom.x + targetRoom.width) - (room.x + room.width));
+          }
+        }
+        if (distanceCm <= 0) {
+          return { result: JSON.stringify({ success: false, reason: `${room.name}'s ${wall} wall already meets or overlaps ${targetRoom.name}. No expansion needed.` }), floorPlan };
+        }
+      } else {
+        distanceCm = Math.round(args.distance_cm as number);
+        if (!distanceCm || distanceCm === 0) {
+          return { result: JSON.stringify({ success: false, reason: "distance_cm must be non-zero (or provide target_room_id)" }), floorPlan };
+        }
       }
 
       // Enforce minimum room dimensions (120cm on any axis)
@@ -2770,7 +2816,9 @@ ${ROOM_TYPES.join(", ")}
 1. **generate_floor_plan** — PRIMARY TOOL. Just provide bedrooms, bathrooms, sqft. The engine builds everything.
 2. **add_room** / **remove_room** / **move_room** — Fine-tune individual rooms after generation.
 3. **resize_room** — Smart resize by area: provide room_id + target_sqft. Use for area-based changes like "make the bedroom bigger".
-4. **reshape_room_boundary** — Directional wall manipulation: move a specific wall (north/south/east/west) by a precise distance in cm. Positive = expand outward, negative = contract. Nearby edges auto-snap flush within 20cm. Use when the user draws arrows or specifies a direction like "expand east by 2m".
+4. **reshape_room_boundary** — Directional wall manipulation. TWO MODES:
+   - **target_room_id mode (PREFERRED)**: provide room_id + wall + target_room_id. The system auto-calculates the exact distance. Use this whenever the user wants one room to expand toward/meet another room. Example: "expand garage north to meet master bedroom" → reshape_room_boundary(garage_id, "north", target_room_id=master_id).
+   - **distance mode**: provide room_id + wall + distance_cm. Use when the user specifies an exact distance like "expand east by 2m".
 5. **connect_rooms** — For adjacency/pairing requests. If rooms are not adjacent, it will move room_2 next to room_1 and shift neighbors to make space, then ensure a direct door. It can also slightly expand rooms to meet minimum dimensional requirements when flush-fitting.
 6. **add_door** / **add_window** — Add additional doors/windows if needed.
 7. **list_rooms** — Inspect current layout with IDs and positions.
@@ -2779,10 +2827,18 @@ ${ROOM_TYPES.join(", ")}
 ═══ VISUAL ANNOTATIONS (RED PENCIL MARKINGS) ═══
 The user may draw RED pencil annotations directly on the floor plan canvas. These appear as red strokes overlaid on the screenshot image. When you see red markings in the canvas screenshot, you MUST interpret them to determine spatial intent:
 
-ARROW pointing outward from a wall → "Expand this wall in the arrow direction"
-  → Identify which room's wall the arrow originates from.
-  → Estimate the arrow's length relative to room dimensions visible in the image AND the coordinate data.
-  → Call reshape_room_boundary(room_id, wall, distance_cm).
+ARROW pointing from one room toward another room → "Expand this room's wall to meet that room"
+  → This is the MOST COMMON annotation pattern.
+  → Identify the SOURCE room (where the arrow starts) and the TARGET room (where it points toward).
+  → Determine which wall of the source room faces the target (north/south/east/west).
+  → Call reshape_room_boundary(source_room_id, wall, target_room_id=target_room_id).
+  → ALWAYS use target_room_id — do NOT try to calculate distance_cm manually.
+  → Example: Arrow drawn upward from Garage toward Master Bedroom + text "expand garage to master bedroom"
+    → reshape_room_boundary(room_id=garage_id, wall="north", target_room_id=master_bedroom_id)
+
+ARROW pointing outward from a wall into empty space → "Expand this wall outward"
+  → If user specifies a distance: reshape_room_boundary(room_id, wall, distance_cm=X).
+  → If no distance specified: estimate based on arrow length relative to room dimensions.
 
 ARROW pointing inward toward a room → "Shrink/contract this wall"
   → Call reshape_room_boundary with a negative distance_cm.
@@ -2802,12 +2858,13 @@ LINE drawn along a wall → "Add a window or door here"
 CIRCLE or MARK on a specific feature → Contextual intent
   → Combine with the user's text message to determine what to do.
 
-IMPORTANT RULES FOR VISUAL INTERPRETATION:
+CRITICAL RULES FOR VISUAL INTERPRETATION:
 1. ALWAYS combine visual markings with the user's text message. Text provides context for ambiguous drawings.
-2. If markings are unclear, describe what you see and ask for clarification rather than guessing.
-3. Use the COORDINATE DATA (room positions/dimensions) to calculate precise distances — do NOT rely on pixel estimation alone.
-4. When an arrow points from one room toward another room's wall, snap the expansion to meet that wall exactly using reshape_room_boundary.
-5. Red markings are ANNOTATIONS, not part of the actual floor plan. They are cleared after your response.
+2. When an arrow points from room A toward room B, ALWAYS use reshape_room_boundary with target_room_id. NEVER try to manually calculate the distance — the tool does it for you automatically and precisely.
+3. If the text says "expand X to Y" or "extend X to meet Y", use reshape_room_boundary with target_room_id — even if the annotation is ambiguous.
+4. Do NOT use move_room or resize_room when the user draws an arrow + says "expand". Use reshape_room_boundary.
+5. If markings are genuinely unclear and text doesn't clarify, ask for clarification rather than guessing.
+6. Red markings are ANNOTATIONS, not part of the actual floor plan. They are cleared after your response.
 
 ═══ SKETCH / IMAGE UPLOAD ═══
 When the user uploads a floor plan image, sketch, or blueprint:
@@ -2821,7 +2878,7 @@ When the user uploads a floor plan image, sketch, or blueprint:
 ═══ WORKFLOW ═══
 1. For text requests: Extract bedrooms/bathrooms/sqft → call **generate_floor_plan**.
 2. For image uploads: Call **generate_from_sketch** with explicit room coordinates.
-3. If the user has drawn red annotations on the canvas, interpret them using the VISUAL ANNOTATIONS rules above. Prefer reshape_room_boundary for arrow-based directional edits.
+3. If the user has drawn red annotations on the canvas, interpret them using the VISUAL ANNOTATIONS rules above. For arrows between rooms, ALWAYS use reshape_room_boundary with target_room_id — never move_room or resize_room.
 4. Review auto-inspection results.
 5. If issues exist, fix with connect_rooms, add_door, move_room, resize_room, or reshape_room_boundary.
 6. Call **validate_floor_plan** to confirm.
@@ -2832,8 +2889,9 @@ When the user uploads a floor plan image, sketch, or blueprint:
 3. When recreating a sketch, first describe what you see, then generate using generate_from_sketch.
 4. ALWAYS call validate_floor_plan after generate_floor_plan or generate_from_sketch.
 5. For post-generation adjustments: use resize_room for area-based changes ("make the bedroom bigger") and reshape_room_boundary for directional changes ("expand the bedroom east" or when the user draws an arrow on a wall).
-6. For ANY relational movement ("move room A to room B", "connect room A with room B", "pair these rooms", "place the bathroom on the left of the bedroom"), ALWAYS use connect_rooms. Do NOT calculate absolute coordinates using move_room.
-7. NEVER claim a requested connection is infeasible without first trying connect_rooms and validation.`;
+6. For "expand room X to meet room Y" or annotations with arrows between rooms: ALWAYS use reshape_room_boundary with target_room_id. Do NOT use move_room or resize_room for this — reshape_room_boundary with target_room_id auto-calculates the exact distance.
+7. For ANY relational movement ("move room A to room B", "connect room A with room B", "pair these rooms", "place the bathroom on the left of the bedroom"), ALWAYS use connect_rooms. Do NOT calculate absolute coordinates using move_room.
+8. NEVER claim a requested connection is infeasible without first trying connect_rooms and validation.`;
 }
 
 function buildRoomSystemPrompt(roomState: RoomState, roomName: string): string {
