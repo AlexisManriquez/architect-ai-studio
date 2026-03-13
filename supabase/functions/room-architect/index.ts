@@ -1757,21 +1757,218 @@ function processFloorPlanTool(
 
     case "resize_room": {
       const roomId = args.room_id as string;
+      const targetSqft = args.target_sqft as number;
       const room = floorPlan.rooms.find(r => r.id === roomId);
       if (!room) return { result: JSON.stringify({ success: false, reason: "Room not found" }), floorPlan };
-      const updated = {
+      if (!targetSqft || targetSqft < 20) return { result: JSON.stringify({ success: false, reason: "target_sqft must be >= 20" }), floorPlan };
+
+      const currentAreaCm2 = room.width * room.height;
+      const targetAreaCm2 = targetSqft * 929;
+      const areaRatio = targetAreaCm2 / currentAreaCm2;
+      const isExpanding = areaRatio > 1;
+
+      // Determine which walls are "free" (no adjacent room within tolerance)
+      const TOLERANCE = 5;
+      const otherRooms = floorPlan.rooms.filter(r => r.id !== roomId);
+
+      type Direction = "north" | "south" | "east" | "west";
+      const freeWalls: Direction[] = [];
+      const blockedWalls: Record<Direction, FloorPlanRoom[]> = { north: [], south: [], east: [], west: [] };
+
+      for (const other of otherRooms) {
+        // North wall (room.y): another room's bottom edge touches it
+        if (Math.abs((other.y + other.height) - room.y) < TOLERANCE &&
+            Math.max(other.x, room.x) < Math.min(other.x + other.width, room.x + room.width) - TOLERANCE) {
+          blockedWalls.north.push(other);
+        }
+        // South wall (room.y + room.height): another room's top edge touches it
+        if (Math.abs(other.y - (room.y + room.height)) < TOLERANCE &&
+            Math.max(other.x, room.x) < Math.min(other.x + other.width, room.x + room.width) - TOLERANCE) {
+          blockedWalls.south.push(other);
+        }
+        // West wall (room.x): another room's right edge touches it
+        if (Math.abs((other.x + other.width) - room.x) < TOLERANCE &&
+            Math.max(other.y, room.y) < Math.min(other.y + other.height, room.y + room.height) - TOLERANCE) {
+          blockedWalls.west.push(other);
+        }
+        // East wall (room.x + room.width): another room's left edge touches it
+        if (Math.abs(other.x - (room.x + room.width)) < TOLERANCE &&
+            Math.max(other.y, room.y) < Math.min(other.y + other.height, room.y + room.height) - TOLERANCE) {
+          blockedWalls.east.push(other);
+        }
+      }
+
+      for (const dir of ["south", "east", "north", "west"] as Direction[]) {
+        if (blockedWalls[dir].length === 0) freeWalls.push(dir);
+      }
+
+      // Calculate how much to grow/shrink
+      const deltaCm2 = targetAreaCm2 - currentAreaCm2;
+      const actions: string[] = [];
+      let updatedRooms = [...floorPlan.rooms];
+      const roomIdx = updatedRooms.findIndex(r => r.id === roomId);
+      let r = { ...updatedRooms[roomIdx] };
+
+      if (freeWalls.length > 0 || !isExpanding) {
+        // Strategy: expand/shrink toward free walls, maintaining aspect ratio if possible
+        // Prefer south/east for expansion (grow "outward"), north/west for shrinkage
+        const preferredExpand: Direction[] = freeWalls.filter(d => d === "south" || d === "east");
+        const expandDirs = preferredExpand.length > 0 ? preferredExpand : freeWalls;
+
+        if (expandDirs.includes("south") || expandDirs.includes("north")) {
+          // Adjust height
+          const newHeight = Math.round(targetAreaCm2 / r.width);
+          const deltaH = newHeight - r.height;
+          if (expandDirs.includes("south")) {
+            r.height = newHeight;
+            actions.push(`Expanded ${r.name} southward by ${Math.abs(deltaH)}cm`);
+          } else if (expandDirs.includes("north")) {
+            r.y = r.y - deltaH;
+            r.height = newHeight;
+            actions.push(`Expanded ${r.name} northward by ${Math.abs(deltaH)}cm`);
+          }
+        } else if (expandDirs.includes("east") || expandDirs.includes("west")) {
+          // Adjust width
+          const newWidth = Math.round(targetAreaCm2 / r.height);
+          const deltaW = newWidth - r.width;
+          if (expandDirs.includes("east")) {
+            r.width = newWidth;
+            actions.push(`Expanded ${r.name} eastward by ${Math.abs(deltaW)}cm`);
+          } else if (expandDirs.includes("west")) {
+            r.x = r.x - deltaW;
+            r.width = newWidth;
+            actions.push(`Expanded ${r.name} westward by ${Math.abs(deltaW)}cm`);
+          }
+        }
+      } else {
+        // All walls blocked — need to push neighbors
+        // Pick the direction with the fewest/smallest neighbors to push
+        const dirCosts: { dir: Direction; cost: number }[] = [];
+        for (const dir of ["south", "east", "north", "west"] as Direction[]) {
+          const totalBlockerArea = blockedWalls[dir].reduce((s, br) => s + br.width * br.height, 0);
+          dirCosts.push({ dir, cost: blockedWalls[dir].length * 1000 + totalBlockerArea });
+        }
+        dirCosts.sort((a, b) => a.cost - b.cost);
+        const pushDir = dirCosts[0].dir;
+
+        // Calculate expansion amount
+        let deltaSize: number;
+        if (pushDir === "south" || pushDir === "north") {
+          const newHeight = Math.round(targetAreaCm2 / r.width);
+          deltaSize = newHeight - r.height;
+        } else {
+          const newWidth = Math.round(targetAreaCm2 / r.height);
+          deltaSize = newWidth - r.width;
+        }
+
+        // Recursively collect all rooms that need to shift in the push direction
+        const roomsToShift = new Set<string>();
+        const collectShifts = (sourceRoom: FloorPlanRoom, dir: Direction) => {
+          for (const other of updatedRooms) {
+            if (other.id === sourceRoom.id || roomsToShift.has(other.id)) continue;
+            if (other.id === roomId) continue; // Don't shift the target room
+            let adjacent = false;
+            if (dir === "south" && Math.abs(other.y - (sourceRoom.y + sourceRoom.height)) < TOLERANCE &&
+                Math.max(other.x, sourceRoom.x) < Math.min(other.x + other.width, sourceRoom.x + sourceRoom.width) - TOLERANCE) {
+              adjacent = true;
+            }
+            if (dir === "north" && Math.abs((other.y + other.height) - sourceRoom.y) < TOLERANCE &&
+                Math.max(other.x, sourceRoom.x) < Math.min(other.x + other.width, sourceRoom.x + sourceRoom.width) - TOLERANCE) {
+              adjacent = true;
+            }
+            if (dir === "east" && Math.abs(other.x - (sourceRoom.x + sourceRoom.width)) < TOLERANCE &&
+                Math.max(other.y, sourceRoom.y) < Math.min(other.y + other.height, sourceRoom.y + sourceRoom.height) - TOLERANCE) {
+              adjacent = true;
+            }
+            if (dir === "west" && Math.abs((other.x + other.width) - sourceRoom.x) < TOLERANCE &&
+                Math.max(other.y, sourceRoom.y) < Math.min(other.y + other.height, sourceRoom.y + sourceRoom.height) - TOLERANCE) {
+              adjacent = true;
+            }
+            if (adjacent) {
+              roomsToShift.add(other.id);
+              collectShifts(other, dir); // Cascade: rooms behind this one also need to shift
+            }
+          }
+        };
+
+        // Collect direct blockers and their cascading neighbors
+        for (const blocker of blockedWalls[pushDir]) {
+          roomsToShift.add(blocker.id);
+          collectShifts(blocker, pushDir);
+        }
+
+        // Apply the expansion to target room
+        if (pushDir === "south") {
+          r.height = Math.round(targetAreaCm2 / r.width);
+        } else if (pushDir === "north") {
+          const newHeight = Math.round(targetAreaCm2 / r.width);
+          r.y = r.y - (newHeight - r.height);
+          r.height = newHeight;
+        } else if (pushDir === "east") {
+          r.width = Math.round(targetAreaCm2 / r.height);
+        } else {
+          const newWidth = Math.round(targetAreaCm2 / r.height);
+          r.x = r.x - (newWidth - r.width);
+          r.width = newWidth;
+        }
+
+        // Shift all affected rooms
+        const absDelta = Math.abs(deltaSize);
+        updatedRooms = updatedRooms.map(rm => {
+          if (!roomsToShift.has(rm.id)) return rm;
+          const shifted = { ...rm };
+          if (pushDir === "south") shifted.y += absDelta;
+          else if (pushDir === "north") shifted.y -= absDelta;
+          else if (pushDir === "east") shifted.x += absDelta;
+          else shifted.x -= absDelta;
+          return shifted;
+        });
+
+        actions.push(`Expanded ${r.name} ${pushDir}ward, shifted ${roomsToShift.size} neighbor(s)`);
+      }
+
+      // Ensure no negative coordinates
+      updatedRooms[roomIdx] = r;
+      const minRoomX = Math.min(...updatedRooms.map(rm => rm.x));
+      const minRoomY = Math.min(...updatedRooms.map(rm => rm.y));
+      if (minRoomX < 0 || minRoomY < 0) {
+        const shiftX = minRoomX < 0 ? -minRoomX : 0;
+        const shiftY = minRoomY < 0 ? -minRoomY : 0;
+        updatedRooms = updatedRooms.map(rm => ({ ...rm, x: rm.x + shiftX, y: rm.y + shiftY }));
+      }
+
+      const newTotalWidth = Math.max(...updatedRooms.map(rm => rm.x + rm.width));
+      const newTotalHeight = Math.max(...updatedRooms.map(rm => rm.y + rm.height));
+
+      // Re-generate doors and windows for the updated layout
+      const newDoors = autoGenerateDoors(updatedRooms);
+      const newWindows = autoGenerateWindows(updatedRooms);
+
+      const newPlan: FloorPlan = {
         ...floorPlan,
-        rooms: floorPlan.rooms.map(r => r.id === roomId ? {
-          ...r,
-          width: args.width != null ? Math.round(args.width as number) : r.width,
-          height: args.height != null ? Math.round(args.height as number) : r.height,
-          x: args.x != null ? Math.round(args.x as number) : r.x,
-          y: args.y != null ? Math.round(args.y as number) : r.y,
-        } : r),
+        rooms: updatedRooms,
+        doors: newDoors,
+        windows: newWindows,
+        totalWidth: newTotalWidth,
+        totalHeight: newTotalHeight,
       };
-      updated.totalWidth = Math.max(...updated.rooms.map(r => r.x + r.width));
-      updated.totalHeight = Math.max(...updated.rooms.map(r => r.y + r.height));
-      return { result: JSON.stringify({ success: true }), floorPlan: updated, action: `Resized ${room.name}` };
+
+      // Auto-repair connectivity
+      const { plan: repairedPlan, repairs } = autoRepairFloorPlan(newPlan);
+
+      const newSqft = Math.round((r.width * r.height) / 929);
+      const totalActions = [...actions, ...repairs];
+
+      return {
+        result: JSON.stringify({
+          success: true,
+          new_sqft: newSqft,
+          room_dimensions: { width: r.width, height: r.height },
+          actions: totalActions,
+        }),
+        floorPlan: repairedPlan,
+        action: `Resized ${room.name} → ~${newSqft} sqft`,
+      };
     }
 
     case "move_room": {
