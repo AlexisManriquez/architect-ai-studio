@@ -996,26 +996,49 @@ const floorPlanTools = [
     type: "function",
     function: {
       name: "generate_floor_plan",
-      description: `Generate a complete floor plan. You provide the room list and target square footage — the backend physics engine handles all coordinate math, door placement, and window placement automatically. Just decide WHAT rooms are needed.`,
+      description: `Generate a complete floor plan using the template-based layout engine. Extract bedrooms, bathrooms, and sqft from the user's request. The engine automatically creates a realistic architectural layout with:
+- Central hallway spine connecting all private rooms
+- Kitchen/dining adjacent to living area (open concept)
+- Garage on the perimeter
+- Balanced left/right wings
+
+DEFAULTS (use when user doesn't specify):
+- Bedrooms: 3
+- Bathrooms: 2.5 (2 full + 1 half)
+- Square footage: 2000
+- Garage: included by default
+- "Half bath" = a small bathroom (powder room)
+
+Extract values from user input:
+- "2 bed 2 bath 2000 sqft" → bedrooms=2, bathrooms=2, sqft=2000
+- "2500 sqft house" → bedrooms=3 (default), bathrooms=2.5 (default), sqft=2500
+- "4 bedroom house" → bedrooms=4, bathrooms=2.5 (default), sqft=2000 (default)
+
+The engine builds the room list automatically from these parameters. You can optionally add extra rooms.`,
       parameters: {
         type: "object",
         properties: {
           name: { type: "string", description: "Name for the floor plan (e.g. 'Modern Ranch Home')" },
-          target_sqft: { type: "number", description: "Total approximate square footage of the house (e.g. 1500, 2200)" },
-          requested_rooms: {
+          target_sqft: { type: "number", description: "Total square footage. Default: 2000" },
+          bedrooms: { type: "number", description: "Number of bedrooms. Default: 3. The first bedroom is always a Master Bedroom (larger)." },
+          bathrooms: { type: "number", description: "Number of bathrooms. Default: 2.5. Use 0.5 increments for half baths (powder rooms). E.g. 2.5 = 2 full baths + 1 half bath." },
+          include_garage: { type: "boolean", description: "Whether to include a garage. Default: true." },
+          include_office: { type: "boolean", description: "Whether to include a home office. Default: false." },
+          include_laundry: { type: "boolean", description: "Whether to include a laundry room. Default: false." },
+          extra_rooms: {
             type: "array",
-            description: "List of rooms to include. Each entry is an object with 'type' (room identifier like 'living-room', 'bedroom-1', 'master-bedroom', 'kitchen', 'garage', etc.) and optional 'size' ('small', 'normal', or 'large'). Use 'size' when the user explicitly asks for a bigger or smaller room. Default is 'normal'.",
+            description: "Optional additional rooms beyond the standard set. Only use for special requests like 'add a pantry' or 'I want a sunroom'.",
             items: {
               type: "object",
               properties: {
-                type: { type: "string", description: "Room identifier, e.g. 'living-room', 'bedroom-1', 'master-bedroom', 'bathroom', 'garage', 'kitchen'" },
-                size: { type: "string", enum: ["small", "normal", "large"], description: "Room size modifier. 'small' = 60% of base area, 'normal' = 100%, 'large' = 160%. Default 'normal'." },
+                type: { type: "string" },
+                size: { type: "string", enum: ["small", "normal", "large"] },
               },
               required: ["type"],
             },
           },
         },
-        required: ["name", "target_sqft", "requested_rooms"],
+        required: ["name"],
         additionalProperties: false,
       },
     },
@@ -1436,14 +1459,63 @@ function processFloorPlanTool(
 ): { result: string; floorPlan: FloorPlan; action?: string } {
   switch (name) {
     case "generate_floor_plan": {
-      const targetSqft = (args.target_sqft as number) || 1500;
-      const requestedRooms = (args.requested_rooms as (string | RoomRequestInput)[]) || [];
-      
-      if (requestedRooms.length === 0) {
-        return { result: JSON.stringify({ success: false, reason: "No rooms requested" }), floorPlan };
+      const targetSqft = (args.target_sqft as number) || 2000;
+      const bedrooms = (args.bedrooms as number) || 3;
+      const bathroomsRaw = (args.bathrooms as number) ?? 2.5;
+      const includeGarage = (args.include_garage as boolean) ?? true;
+      const includeOffice = (args.include_office as boolean) ?? false;
+      const includeLaundry = (args.include_laundry as boolean) ?? false;
+      const extraRooms = (args.extra_rooms as RoomRequestInput[]) || [];
+
+      // Build room list from parameters
+      const requestedRooms: RoomRequestInput[] = [];
+
+      // Living room + kitchen + dining (always included)
+      requestedRooms.push({ type: "living-room" });
+      requestedRooms.push({ type: "kitchen" });
+      requestedRooms.push({ type: "dining-room" });
+
+      // Entry
+      requestedRooms.push({ type: "entry" });
+
+      // Bedrooms: first is master (large)
+      for (let i = 1; i <= bedrooms; i++) {
+        if (i === 1) {
+          requestedRooms.push({ type: "master-bedroom", size: "large" });
+        } else {
+          requestedRooms.push({ type: `bedroom-${i}` });
+        }
       }
 
-      // Use the procedural layout engine — zero overlaps guaranteed
+      // Bathrooms: full baths + optional half bath
+      const fullBaths = Math.floor(bathroomsRaw);
+      const hasHalfBath = bathroomsRaw % 1 >= 0.5;
+      for (let i = 1; i <= fullBaths; i++) {
+        if (i === 1 && bedrooms >= 1) {
+          requestedRooms.push({ type: "master-bathroom" });
+        } else {
+          requestedRooms.push({ type: `bathroom-${i}` });
+        }
+      }
+      if (hasHalfBath) {
+        requestedRooms.push({ type: "bathroom", size: "small" }); // half bath / powder room
+      }
+
+      // Garage
+      if (includeGarage) {
+        requestedRooms.push({ type: "garage" });
+      }
+
+      // Optional rooms
+      if (includeOffice) requestedRooms.push({ type: "office" });
+      if (includeLaundry) requestedRooms.push({ type: "laundry" });
+
+      // Extra rooms
+      requestedRooms.push(...extraRooms);
+
+      console.log(`generate_floor_plan: ${bedrooms} bed, ${bathroomsRaw} bath, ${targetSqft} sqft, garage=${includeGarage}, rooms=${requestedRooms.length}`);
+
+      // Use the template-based layout engine
       const rooms = generateProceduralLayout(requestedRooms, targetSqft);
       
       const totalWidth = Math.max(...rooms.map(r => r.x + r.width));
@@ -2029,11 +2101,26 @@ function buildFloorPlanSystemPrompt(floorPlan: FloorPlan): string {
 
   return `You are an expert residential floor plan architect AI. You help users design house floor plans.
 
-YOU DO NOT NEED TO CALCULATE COORDINATES. The backend physics engine handles all room coordinate placement, door generation, and window generation automatically. Your job is to:
+YOU DO NOT NEED TO CALCULATE COORDINATES OR BUILD ROOM LISTS. The template-based layout engine handles everything. Your job is to:
 1. Listen to the user's request.
-2. Decide what rooms are needed and the approximate total square footage.
-3. Call generate_floor_plan with the room list and target sqft.
-4. The engine will return a mathematically perfect layout with zero overlaps.
+2. Extract: number of bedrooms, number of bathrooms, and target square footage.
+3. Call generate_floor_plan with those values. The engine builds the full room list and layout automatically.
+
+═══ DEFAULT VALUES ═══
+If the user doesn't specify a value, use these defaults:
+- Bedrooms: 3
+- Bathrooms: 2.5 (2 full bathrooms + 1 half bath/powder room)
+- Square footage: 2000
+- Garage: included
+- Office: not included (unless asked)
+- Laundry: not included (unless asked)
+
+═══ EXTRACTION EXAMPLES ═══
+- "I want a 2 bed 2 bath house with 2000 sqft" → bedrooms=2, bathrooms=2, target_sqft=2000
+- "Build me a 2500 sqft house" → bedrooms=3 (default), bathrooms=2.5 (default), target_sqft=2500
+- "4 bedroom home" → bedrooms=4, bathrooms=2.5 (default), target_sqft=2000 (default)
+- "small 1 bedroom apartment" → bedrooms=1, bathrooms=1, target_sqft=600, include_garage=false
+- "3 bed 2.5 bath with office and laundry" → bedrooms=3, bathrooms=2.5, include_office=true, include_laundry=true
 
 YOU HAVE TWO INFORMATION SOURCES:
 1. A SCREENSHOT IMAGE of the current canvas (visual — examine it carefully!)
@@ -2052,35 +2139,8 @@ Origin (0,0) = top-left corner. X → right, Y → down. All values in cm.
 ═══ ROOM TYPES ═══
 ${ROOM_TYPES.join(", ")}
 
-═══ SIZING GUIDE ═══
-Use these rough sqft targets when deciding total_sqft:
-  - Studio/1-bed apartment: 500-800 sqft
-  - 2-bedroom home: 1000-1400 sqft
-  - 3-bedroom home: 1400-2000 sqft
-  - 4-bedroom home: 2000-2800 sqft
-  - 5+ bedroom home: 2800-4000+ sqft
-Include garage in sqft estimate if requested (~300-500 sqft for a 2-car garage).
-
-═══ ROOM NAMING CONVENTIONS ═══
-When calling generate_floor_plan, use these room objects in requested_rooms:
-  - { "type": "living-room" }, { "type": "kitchen" }, { "type": "dining-room" }
-  - { "type": "bedroom-1" }, { "type": "bedroom-2" }, { "type": "master-bedroom" }
-  - { "type": "bathroom" }, { "type": "master-bathroom" }, { "type": "bathroom-2" }
-  - { "type": "hallway" }, { "type": "entry" }, { "type": "garage" }
-  - { "type": "office" }, { "type": "laundry" }, { "type": "closet-1" }
-
-═══ ROOM SIZING ═══
-Each room object accepts an optional "size" field: "small", "normal", or "large".
-  - "small" = 60% of the default area for that room type
-  - "normal" = default (you can omit the size field)
-  - "large" = 160% of the default area for that room type
-Use the "size" parameter when the user explicitly asks for a bigger or smaller specific room.
-Example: User says "I want a large master bedroom and a small office" →
-  { "type": "master-bedroom", "size": "large" }, { "type": "office", "size": "small" }
-Prefer using size parameters in generate_floor_plan for initial generation. Use resize_room with target_sqft for post-generation adjustments (e.g. "make the master bedroom 100 sqft bigger" → calculate current sqft + 100 and pass as target_sqft).
-
 ═══ TOOLS ═══
-1. **generate_floor_plan** — Provide room list (with optional sizes) + target sqft. The engine handles coordinates, doors, and windows.
+1. **generate_floor_plan** — PRIMARY TOOL. Just provide bedrooms, bathrooms, sqft. The engine builds everything.
 2. **add_room** / **remove_room** / **move_room** — Fine-tune individual rooms after generation.
 3. **resize_room** — Smart resize: provide room_id + target_sqft. The engine will expand toward free walls or shift neighbors. Doors/windows are auto-regenerated. Do NOT calculate coordinates yourself.
 4. **add_door** / **add_window** — Add additional doors/windows if needed.
@@ -2090,51 +2150,25 @@ Prefer using size parameters in generate_floor_plan for initial generation. Use 
 ═══ SKETCH / IMAGE UPLOAD ═══
 When the user uploads a floor plan image, sketch, or blueprint:
 1. Use **generate_from_sketch** — NOT generate_floor_plan.
-2. STEP 1 — INVENTORY: Before generating coordinates, list EVERY room you see in the image. Count them carefully.
-   - Each room must have a UNIQUE name. Never create two rooms with the same name.
-   - If the image shows "Bed 2", "Bed 3", "Bed 4" — those are THREE separate bedrooms, not duplicates.
-   - If there are multiple bathrooms, give each a unique name: "Master Bath", "Bathroom 2", "Bath 3", etc.
+2. STEP 1 — INVENTORY: List EVERY room you see in the image with UNIQUE names.
 3. STEP 2 — OVERALL SHAPE: Determine the house footprint shape.
-   - Is it wide/horizontal or tall/vertical?
-   - Is it rectangular, L-shaped, T-shaped, U-shaped?
-   - The generated layout MUST match this overall shape.
-4. STEP 3 — SPATIAL GRID: Mentally divide the image into a grid.
-   - If the house is ~90ft wide × ~65ft deep, that's ~2740cm × ~1980cm.
-   - Estimate each room's position as a fraction of total width/height.
-   - A room at the far right occupies x ≈ 70-100% of total width.
-   - A room at the top occupies y ≈ 0-30% of total height.
-5. STEP 4 — COORDINATES: Convert to cm. Rooms that are side-by-side MUST share exact edges.
-   - If Room A ends at x=1200 and Room B is to its right, Room B starts at x=1200.
-   - NO GAPS between adjacent rooms. NO OVERLAPS.
+4. STEP 3 — SPATIAL GRID: Estimate each room's position as a fraction of total width/height.
+5. STEP 4 — COORDINATES: Convert to cm. Rooms MUST share exact edges (no gaps, no overlaps).
 6. After calling generate_from_sketch, ALWAYS call validate_floor_plan.
 
-CRITICAL RULES FOR SKETCHES:
-- NEVER duplicate room names. Every room name must be unique.
-- Match the OVERALL SHAPE of the reference image (wide house = wide layout, NOT a tall column of rooms).
-- Bedrooms on the right side of the image → place at high x values.
-- Rooms on the left side → low x values.
-- The spatial arrangement is MORE important than exact sizes.
-
-ESTIMATION TIPS:
-- Standard room dimensions: bedrooms 12-16ft, bathrooms 7-10ft, kitchens 12-20ft, hallways 4-6ft wide, closets 5-9ft.
-- Garages: 15-26ft × 20-26ft. Porches: 6-13ft deep.
-- Living/Great rooms: 15-22ft × 18-24ft.
-- Convert: 1ft = 30.48cm. Round to nearest 10cm for cleanliness.
-
 ═══ WORKFLOW ═══
-1. For text-only requests: Call **generate_floor_plan** with room list and sqft.
-2. For image uploads: Call **generate_from_sketch** with explicit room coordinates extracted from the image.
-3. Review the auto-inspection results included in the response.
-4. If issues exist, fix them with add_door, move_room, resize_room, etc.
-5. Call **validate_floor_plan** to confirm all issues are resolved.
+1. For text requests: Extract bedrooms/bathrooms/sqft → call **generate_floor_plan**.
+2. For image uploads: Call **generate_from_sketch** with explicit room coordinates.
+3. Review auto-inspection results.
+4. If issues exist, fix with add_door, move_room, resize_room.
+5. Call **validate_floor_plan** to confirm.
 
 ═══ RESPONSE RULES ═══
-1. ALWAYS call generate_floor_plan (text) or generate_from_sketch (image) when the user asks to create or redesign a floor plan.
+1. ALWAYS call generate_floor_plan when the user asks to create a house. Extract bedrooms, bathrooms, sqft.
 2. Be conversational and brief (1-3 sentences after executing actions).
-3. When recreating a sketch, first describe what you see (room count, shape, layout), then generate using generate_from_sketch.
-4. If the user asks to add/remove specific rooms from an existing plan, use add_room/remove_room.
-5. ALWAYS call validate_floor_plan after generate_floor_plan or generate_from_sketch — no exceptions.
-6. When a user mentions wanting a "large" or "small" room, use the size parameter in generate_floor_plan rather than calling resize_room after.`;
+3. When recreating a sketch, first describe what you see, then generate using generate_from_sketch.
+4. ALWAYS call validate_floor_plan after generate_floor_plan or generate_from_sketch.
+5. For post-generation adjustments ("make the master bedroom bigger"), use resize_room with target_sqft.`;
 }
 
 function buildRoomSystemPrompt(roomState: RoomState, roomName: string): string {
