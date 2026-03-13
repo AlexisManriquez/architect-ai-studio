@@ -1120,7 +1120,7 @@ Do NOT provide raw coordinates — just the room_id and target_sqft.`,
     type: "function",
     function: {
       name: "move_room",
-      description: "Move a room to an absolute position. After move, doors/windows are auto-regenerated and connectivity is auto-repaired.",
+      description: "Move a room to an absolute coordinate position. DO NOT use this tool if the user asks to place a room next to another room (e.g. 'move bathroom next to bedroom' or 'connect garage to house'). Use connect_rooms instead.",
       parameters: {
         type: "object",
         properties: {
@@ -1137,7 +1137,7 @@ Do NOT provide raw coordinates — just the room_id and target_sqft.`,
     type: "function",
     function: {
       name: "connect_rooms",
-      description: `Connect two rooms. If they are already adjacent, a door is added/ensured between them. If not adjacent, room_2 is moved adjacent to room_1 (pairing) and neighboring rooms are shifted to make space. Use this for requests like "connect master bathroom to master bedroom" or "pair room A with room B".`,
+      description: `Connect two rooms. If they are already adjacent, a door is added/ensured between them. If not adjacent, room_2 is moved adjacent to room_1 (pairing) and neighboring rooms are shifted to make space. The room_2's dimensions will be responsively reshaped (flush fit) to fit nicely against room_1. ALWAYS use this instead of move_room for relational positioning requests like "connect master bathroom to master bedroom" or "move room A next to room B".`,
       parameters: {
         type: "object",
         properties: {
@@ -1618,46 +1618,54 @@ function connectOrPairRooms(
     const room2Area = room2.width * room2.height;
 
     // Helper: compute best dimensions for room2 on a given side of room1
-    function bestFitForSide(side: CardinalDirection, r1: FloorPlanRoom, origW: number, origH: number, area: number): { w: number; h: number; rotated: boolean; reshaped: boolean } {
+    function bestFitForSide(side: CardinalDirection, r1: FloorPlanRoom, r2Type: string, origW: number, origH: number, area: number): { w: number; h: number; rotated: boolean; reshaped: boolean } {
       const isHorizontal = side === "east" || side === "west";
-      // The "wall length" room2 should match is room1's height (for east/west) or width (for north/south)
       const wallLen = isHorizontal ? r1.height : r1.width;
+      const minD = Math.min(ROOM_MIN_DIMS[r2Type]?.minW || 150, ROOM_MIN_DIMS[r2Type]?.minH || 150);
 
-      // Option 1: original orientation
-      const opt1_along = isHorizontal ? origH : origW;  // dimension along the shared wall
+      const opt1_along = isHorizontal ? origH : origW;
       const opt1_perp = isHorizontal ? origW : origH;
 
-      // Option 2: rotated (swap w/h)
       const opt2_along = isHorizontal ? origW : origH;
       const opt2_perp = isHorizontal ? origH : origW;
 
-      // Option 3: reshaped to match wall length exactly (preserve area)
       const opt3_along = wallLen;
       const opt3_perp = Math.round(area / wallLen);
 
-      // Score: lower is better. Prefer matching the wall length closely.
-      function score(along: number, perp: number): number {
-        const wallFit = Math.abs(along - wallLen); // 0 = perfect match
+      const opt4_along = wallLen;
+      const opt4_perp = Math.max(opt3_perp, minD);
+
+      function score(along: number, perp: number, isExpanded: boolean = false): number {
+        const wallFit = Math.abs(along - wallLen);
         const aspectRatio = Math.max(along, perp) / Math.max(1, Math.min(along, perp));
-        // Penalize extreme aspect ratios (> 3:1)
         const aspectPenalty = aspectRatio > 3 ? (aspectRatio - 3) * 500 : 0;
-        // Penalize if room2 is longer than room1's wall (overhang)
         const overhangPenalty = along > wallLen ? (along - wallLen) * 2 : 0;
-        return wallFit + overhangPenalty + aspectPenalty;
+        const thinPenalty = perp < minD ? (minD - perp) * 100 : 0;
+        const expandPenalty = isExpanded ? (perp - opt3_perp) * 2 : 0;
+        return wallFit + overhangPenalty + aspectPenalty + thinPenalty + expandPenalty;
       }
 
       const s1 = score(opt1_along, opt1_perp);
       const s2 = score(opt2_along, opt2_perp);
       const s3 = score(opt3_along, opt3_perp);
-      // Only use reshape if it's meaningfully better and aspect ratio is reasonable
-      const opt3Aspect = Math.max(opt3_along, opt3_perp) / Math.max(1, Math.min(opt3_along, opt3_perp));
+      const s4 = score(opt4_along, opt4_perp, opt4_perp > opt3_perp);
 
-      if (s3 < s1 && s3 < s2 && opt3_perp >= 120 && opt3Aspect <= 3) {
+      const bonus3 = s3 < s1 && s3 < s2 ? -50 : 0;
+      const bonus4 = s4 < s1 && s4 < s2 ? -100 : 0;
+      
+      const minScore = Math.min(s1, s2, s3 + bonus3, s4 + bonus4);
+
+      if (minScore === s4 + bonus4) {
+        return isHorizontal
+          ? { w: opt4_perp, h: opt4_along, rotated: false, reshaped: true }
+          : { w: opt4_along, h: opt4_perp, rotated: false, reshaped: true };
+      }
+      if (minScore === s3 + bonus3) {
         return isHorizontal
           ? { w: opt3_perp, h: opt3_along, rotated: false, reshaped: true }
           : { w: opt3_along, h: opt3_perp, rotated: false, reshaped: true };
       }
-      if (s2 < s1) {
+      if (minScore === s2) {
         return isHorizontal
           ? { w: opt2_perp, h: opt2_along, rotated: true, reshaped: false }
           : { w: opt2_along, h: opt2_perp, rotated: true, reshaped: false };
@@ -1673,7 +1681,7 @@ function connectOrPairRooms(
     const candidates = sideOrder.map(side => {
       const blockers = getRoomsTouchingSide(room1!, updatedRooms.filter(r => r.id !== room1!.id && r.id !== room2!.id), side);
       const blockerCost = blockers.reduce((s, r) => s + r.width * r.height, 0) + blockers.length * 1000;
-      const fit = bestFitForSide(side, room1!, room2!.width, room2!.height, room2Area);
+      const fit = bestFitForSide(side, room1!, room2!.type, room2!.width, room2!.height, room2Area);
       const isHorizontal = side === "east" || side === "west";
       const wallLen = isHorizontal ? room1!.height : room1!.width;
       const fitAlong = isHorizontal ? fit.h : fit.w;
@@ -2557,7 +2565,7 @@ ${ROOM_TYPES.join(", ")}
 1. **generate_floor_plan** — PRIMARY TOOL. Just provide bedrooms, bathrooms, sqft. The engine builds everything.
 2. **add_room** / **remove_room** / **move_room** — Fine-tune individual rooms after generation.
 3. **resize_room** — Smart resize: provide room_id + target_sqft. The engine will expand toward free walls or shift neighbors. Doors/windows are auto-regenerated. Do NOT calculate coordinates yourself.
-4. **connect_rooms** — For adjacency/pairing requests. If rooms are not adjacent, it will move room_2 next to room_1 and shift neighbors to make space, then ensure a direct door.
+4. **connect_rooms** — For adjacency/pairing requests. If rooms are not adjacent, it will move room_2 next to room_1 and shift neighbors to make space, then ensure a direct door. It can also slightly expand rooms to meet minimum dimensional requirements when flush-fitting.
 5. **add_door** / **add_window** — Add additional doors/windows if needed.
 6. **list_rooms** — Inspect current layout with IDs and positions.
 7. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
@@ -2584,7 +2592,7 @@ When the user uploads a floor plan image, sketch, or blueprint:
 3. When recreating a sketch, first describe what you see, then generate using generate_from_sketch.
 4. ALWAYS call validate_floor_plan after generate_floor_plan or generate_from_sketch.
 5. For post-generation adjustments ("make the master bedroom bigger"), use resize_room with target_sqft.
-6. For requests like "connect room A to room B" or "pair these rooms", use connect_rooms.
+6. For ANY relational movement ("move room A to room B", "connect room A with room B", "pair these rooms", "place the bathroom on the left of the bedroom"), ALWAYS use connect_rooms. Do NOT calculate absolute coordinates using move_room.
 7. NEVER claim a requested connection is infeasible without first trying connect_rooms and validation.`;
 }
 
