@@ -2402,104 +2402,124 @@ function processFloorPlanTool(
         return { result: JSON.stringify({ success: false, reason: "wall must be north, south, east, or west" }), floorPlan };
       }
       if (!distanceCm || distanceCm === 0) {
-        return { result: JSON.stringify({ success: false, reason: "distance_cm must be non-zero. For expand-to-meet use snap_rooms_together instead." }), floorPlan };
+        return { result: JSON.stringify({ success: false, reason: "distance_cm must be non-zero." }), floorPlan };
       }
 
-      // Enforce minimum room dimensions (120cm on any axis)
+      // 1. Detect neighbors touching this wall
+      const { blocked: blockedWalls } = detectBlockedWalls(room, floorPlan.rooms);
+      const blockingNeighbors = blockedWalls[wall];
+
       const MIN_DIM = 120;
       let clampedDistance = distanceCm;
       const isVertical = wall === "north" || wall === "south";
       const currentDim = isVertical ? room.height : room.width;
-      // Positive = expand outward, negative = contract inward
-      const newDim = currentDim + Math.abs(clampedDistance) * (clampedDistance > 0 ? 1 : -1);
-      if (newDim < MIN_DIM) {
-        clampedDistance = -(currentDim - MIN_DIM); // clamp to minimum
-        if (Math.abs(clampedDistance) < 1) {
-          return { result: JSON.stringify({ success: false, reason: `Room is already at minimum dimension (${MIN_DIM}cm). Cannot shrink further.` }), floorPlan };
+      
+      // 2. Clamp for target room's minimum dimension
+      const newDimTarget = currentDim + Math.abs(clampedDistance) * (clampedDistance > 0 ? 1 : -1);
+      if (newDimTarget < MIN_DIM) {
+        clampedDistance = -(currentDim - MIN_DIM);
+      }
+
+      // 3. Clamp for neighbors' minimum dimensions (if expanding room outward, neighbors shrink)
+      if (clampedDistance > 0 && blockingNeighbors.length > 0) {
+        let maxAllowedExpand = Infinity;
+        for (const neighbor of blockingNeighbors) {
+           const nDim = isVertical ? neighbor.height : neighbor.width;
+           const availableToShrink = nDim - MIN_DIM;
+           if (availableToShrink < maxAllowedExpand) {
+             maxAllowedExpand = availableToShrink;
+           }
+        }
+        if (clampedDistance > maxAllowedExpand) {
+           clampedDistance = Math.max(0, maxAllowedExpand);
         }
       }
 
-      const { blocked: blockedWalls } = detectBlockedWalls(room, floorPlan.rooms);
-      const isBlocked = blockedWalls[wall].length > 0;
-      const isExpanding = clampedDistance > 0;
+      if (Math.abs(clampedDistance) < 1) {
+        return { result: JSON.stringify({ success: false, reason: `Cannot move wall. Would violate minimum room dimension limit (${MIN_DIM}cm).` }), floorPlan };
+      }
+
       const absDist = Math.abs(clampedDistance);
+      const actualIsExpanding = clampedDistance > 0;
+      
+      // 4. Calculate raw delta vector for the specific wall's edge
+      let deltaX = 0, deltaY = 0;
+      if (wall === "north") deltaY = actualIsExpanding ? -absDist : absDist;
+      if (wall === "south") deltaY = actualIsExpanding ? absDist : -absDist;
+      if (wall === "west") deltaX = actualIsExpanding ? -absDist : absDist;
+      if (wall === "east") deltaX = actualIsExpanding ? absDist : -absDist;
 
       const actions: string[] = [];
       let updatedRooms = [...floorPlan.rooms];
       const roomIdx = updatedRooms.findIndex(r => r.id === room.id);
       let r = { ...updatedRooms[roomIdx] };
 
-      // Apply the wall movement
-      if (wall === "north") {
-        r.y = isExpanding ? r.y - absDist : r.y + absDist;
-        r.height = isExpanding ? r.height + absDist : r.height - absDist;
-      } else if (wall === "south") {
-        r.height = isExpanding ? r.height + absDist : r.height - absDist;
-      } else if (wall === "west") {
-        r.x = isExpanding ? r.x - absDist : r.x + absDist;
-        r.width = isExpanding ? r.width + absDist : r.width - absDist;
-      } else { // east
-        r.width = isExpanding ? r.width + absDist : r.width - absDist;
-      }
+      // 5. Apply movement to Target Room
+      if (wall === "north") { r.y += deltaY; r.height -= deltaY; }
+      else if (wall === "south") { r.height += deltaY; }
+      else if (wall === "west") { r.x += deltaX; r.width -= deltaX; }
+      else if (wall === "east") { r.width += deltaX; }
 
-      // Snap logic: if the moved wall edge is within 20cm of a neighbor's edge, snap flush
-      const SNAP_THRESHOLD = 20;
-      for (const other of updatedRooms) {
-        if (other.id === room.id) continue;
-        if (wall === "north") {
-          const otherBottom = other.y + other.height;
-          const gap = Math.abs(r.y - otherBottom);
-          if (gap > 0 && gap < SNAP_THRESHOLD && Math.max(other.x, r.x) < Math.min(other.x + other.width, r.x + r.width)) {
-            const snapDelta = r.y - otherBottom;
-            r.y = otherBottom;
-            r.height += snapDelta;
-            actions.push(`Snapped ${r.name} north wall flush to ${other.name}`);
-          }
-        } else if (wall === "south") {
-          const roomBottom = r.y + r.height;
-          const gap = Math.abs(roomBottom - other.y);
-          if (gap > 0 && gap < SNAP_THRESHOLD && Math.max(other.x, r.x) < Math.min(other.x + other.width, r.x + r.width)) {
-            r.height += (other.y - roomBottom);
-            actions.push(`Snapped ${r.name} south wall flush to ${other.name}`);
-          }
-        } else if (wall === "west") {
-          const otherRight = other.x + other.width;
-          const gap = Math.abs(r.x - otherRight);
-          if (gap > 0 && gap < SNAP_THRESHOLD && Math.max(other.y, r.y) < Math.min(other.y + other.height, r.y + r.height)) {
-            const snapDelta = r.x - otherRight;
-            r.x = otherRight;
-            r.width += snapDelta;
-            actions.push(`Snapped ${r.name} west wall flush to ${other.name}`);
-          }
-        } else { // east
-          const roomRight = r.x + r.width;
-          const gap = Math.abs(roomRight - other.x);
-          if (gap > 0 && gap < SNAP_THRESHOLD && Math.max(other.y, r.y) < Math.min(other.y + other.height, r.y + r.height)) {
-            r.width += (other.x - roomRight);
-            actions.push(`Snapped ${r.name} east wall flush to ${other.name}`);
-          }
-        }
-      }
+      const verb = actualIsExpanding ? "Expanded" : "Contracted";
+      actions.push(`${verb} ${r.name} ${wall} wall by ${absDist}cm`);
 
-      // If blocked, cascade-shift neighbors
-      if (isBlocked && isExpanding) {
-        const roomsToShift = collectCascadeShifts(blockedWalls[wall], wall, updatedRooms, room.id);
+      // 6. Apply symmetrical resizing to touching neighbors (Simulates dragging a shared partition)
+      const modifiedNeighborIds = new Set<string>();
+      if (blockingNeighbors.length > 0) {
         updatedRooms = updatedRooms.map(rm => {
-          if (!roomsToShift.has(rm.id)) return rm;
+          if (!blockingNeighbors.some(b => b.id === rm.id)) return rm;
+          modifiedNeighborIds.add(rm.id);
           const shifted = { ...rm };
-          if (wall === "south") shifted.y += absDist;
-          else if (wall === "north") shifted.y -= absDist;
-          else if (wall === "east") shifted.x += absDist;
-          else shifted.x -= absDist;
+          if (wall === "north") {
+            // Neighbor is on the North. Its South wall moves by deltaY
+            shifted.height += deltaY; 
+          } else if (wall === "south") {
+            // Neighbor is on the South. Its North wall moves by deltaY
+            shifted.y += deltaY;
+            shifted.height -= deltaY;
+          } else if (wall === "west") {
+            // Neighbor is on the West. Its East wall moves by deltaX
+            shifted.width += deltaX;
+          } else if (wall === "east") {
+            // Neighbor is on the East. Its West wall moves by deltaX
+            shifted.x += deltaX;
+            shifted.width -= deltaX;
+          }
           return shifted;
         });
-        if (roomsToShift.size > 0) {
-          actions.push(`Shifted ${roomsToShift.size} neighbor(s) ${wall}ward`);
+        actions.push(`Synchronized shared wall for ${modifiedNeighborIds.size} adjacent room(s)`);
+      } else {
+        // 7. Snap logic: Only applies if moving into empty space
+        const SNAP_THRESHOLD = 20;
+        for (const other of updatedRooms) {
+          if (other.id === room.id || modifiedNeighborIds.has(other.id)) continue;
+          if (wall === "north") {
+            const otherBottom = other.y + other.height;
+            const gap = Math.abs(r.y - otherBottom);
+            if (gap > 0 && gap < SNAP_THRESHOLD && Math.max(other.x, r.x) < Math.min(other.x + other.width, r.x + r.width)) {
+              const snapDelta = r.y - otherBottom; r.y = otherBottom; r.height += snapDelta; actions.push(`Snapped flush to ${other.name}`);
+            }
+          } else if (wall === "south") {
+            const roomBottom = r.y + r.height;
+            const gap = Math.abs(roomBottom - other.y);
+            if (gap > 0 && gap < SNAP_THRESHOLD && Math.max(other.x, r.x) < Math.min(other.x + other.width, r.x + r.width)) {
+              r.height += (other.y - roomBottom); actions.push(`Snapped flush to ${other.name}`);
+            }
+          } else if (wall === "west") {
+            const otherRight = other.x + other.width;
+            const gap = Math.abs(r.x - otherRight);
+            if (gap > 0 && gap < SNAP_THRESHOLD && Math.max(other.y, r.y) < Math.min(other.y + other.height, r.y + r.height)) {
+              const snapDelta = r.x - otherRight; r.x = otherRight; r.width += snapDelta; actions.push(`Snapped flush to ${other.name}`);
+            }
+          } else if (wall === "east") {
+            const roomRight = r.x + r.width;
+            const gap = Math.abs(roomRight - other.x);
+            if (gap > 0 && gap < SNAP_THRESHOLD && Math.max(other.y, r.y) < Math.min(other.y + other.height, r.y + r.height)) {
+              r.width += (other.x - roomRight); actions.push(`Snapped flush to ${other.name}`);
+            }
+          }
         }
       }
-
-      const verb = isExpanding ? "Expanded" : "Contracted";
-      actions.unshift(`${verb} ${r.name} ${wall} wall by ${absDist}cm`);
 
       updatedRooms[roomIdx] = r;
       updatedRooms = normalizeRoomCoordinates(updatedRooms);
