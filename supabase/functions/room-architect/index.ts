@@ -1503,6 +1503,247 @@ function snapWindowToWall(win: FloorPlanWindow, room: FloorPlanRoom): FloorPlanW
   return corrected;
 }
 
+// ─── Room Pairing / Connection Helpers ──────────────────────────────────────
+type CardinalDirection = "north" | "south" | "east" | "west";
+
+function roomsOverlap(a: FloorPlanRoom, b: FloorPlanRoom): boolean {
+  const overlapX = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+  const overlapY = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  return overlapX > 1 && overlapY > 1;
+}
+
+function normalizeRoomCoordinates(rooms: FloorPlanRoom[]): FloorPlanRoom[] {
+  const minX = Math.min(...rooms.map(r => r.x));
+  const minY = Math.min(...rooms.map(r => r.y));
+  if (minX >= 0 && minY >= 0) return rooms;
+  const shiftX = minX < 0 ? -minX : 0;
+  const shiftY = minY < 0 ? -minY : 0;
+  return rooms.map(r => ({ ...r, x: r.x + shiftX, y: r.y + shiftY }));
+}
+
+function resolveRoomByRef(rooms: FloorPlanRoom[], roomRef: string): FloorPlanRoom | null {
+  if (!roomRef) return null;
+  const ref = roomRef.toLowerCase().trim();
+  const byId = rooms.find(r => r.id === roomRef);
+  if (byId) return byId;
+  const byExactName = rooms.find(r => r.name.toLowerCase() === ref);
+  if (byExactName) return byExactName;
+  const byContains = rooms.find(r => r.name.toLowerCase().includes(ref) || ref.includes(r.name.toLowerCase()));
+  return byContains || null;
+}
+
+function getRoomsTouchingSide(source: FloorPlanRoom, rooms: FloorPlanRoom[], side: CardinalDirection): FloorPlanRoom[] {
+  const TOLERANCE = 5;
+  const touching: FloorPlanRoom[] = [];
+  for (const other of rooms) {
+    if (other.id === source.id) continue;
+    if (side === "north" && Math.abs((other.y + other.height) - source.y) < TOLERANCE && Math.max(other.x, source.x) < Math.min(other.x + other.width, source.x + source.width) - TOLERANCE) {
+      touching.push(other);
+    }
+    if (side === "south" && Math.abs(other.y - (source.y + source.height)) < TOLERANCE && Math.max(other.x, source.x) < Math.min(other.x + other.width, source.x + source.width) - TOLERANCE) {
+      touching.push(other);
+    }
+    if (side === "west" && Math.abs((other.x + other.width) - source.x) < TOLERANCE && Math.max(other.y, source.y) < Math.min(other.y + other.height, source.y + source.height) - TOLERANCE) {
+      touching.push(other);
+    }
+    if (side === "east" && Math.abs(other.x - (source.x + source.width)) < TOLERANCE && Math.max(other.y, source.y) < Math.min(other.y + other.height, source.y + source.height) - TOLERANCE) {
+      touching.push(other);
+    }
+  }
+  return touching;
+}
+
+function cascadeShiftRooms(
+  rooms: FloorPlanRoom[],
+  seedRoomIds: string[],
+  side: CardinalDirection,
+  delta: number,
+  ignoreIds: Set<string> = new Set()
+): FloorPlanRoom[] {
+  const TOLERANCE = 5;
+  const toShift = new Set(seedRoomIds.filter(id => !ignoreIds.has(id)));
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const currentShifting = rooms.filter(r => toShift.has(r.id));
+    for (const source of currentShifting) {
+      for (const other of rooms) {
+        if (other.id === source.id || toShift.has(other.id) || ignoreIds.has(other.id)) continue;
+        let adjacent = false;
+        if (side === "south" && Math.abs(other.y - (source.y + source.height)) < TOLERANCE && Math.max(other.x, source.x) < Math.min(other.x + other.width, source.x + source.width) - TOLERANCE) adjacent = true;
+        if (side === "north" && Math.abs((other.y + other.height) - source.y) < TOLERANCE && Math.max(other.x, source.x) < Math.min(other.x + other.width, source.x + source.width) - TOLERANCE) adjacent = true;
+        if (side === "east" && Math.abs(other.x - (source.x + source.width)) < TOLERANCE && Math.max(other.y, source.y) < Math.min(other.y + other.height, source.y + source.height) - TOLERANCE) adjacent = true;
+        if (side === "west" && Math.abs((other.x + other.width) - source.x) < TOLERANCE && Math.max(other.y, source.y) < Math.min(other.y + other.height, source.y + source.height) - TOLERANCE) adjacent = true;
+        if (adjacent) {
+          toShift.add(other.id);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return rooms.map(r => {
+    if (!toShift.has(r.id)) return r;
+    if (side === "south") return { ...r, y: r.y + delta };
+    if (side === "north") return { ...r, y: r.y - delta };
+    if (side === "east") return { ...r, x: r.x + delta };
+    return { ...r, x: r.x - delta };
+  });
+}
+
+function connectOrPairRooms(
+  floorPlan: FloorPlan,
+  roomRef1: string,
+  roomRef2: string,
+  preferredSide?: CardinalDirection
+): { floorPlan: FloorPlan; actions: string[]; error?: string } {
+  let updatedRooms = floorPlan.rooms.map(r => ({ ...r }));
+  let room1 = resolveRoomByRef(updatedRooms, roomRef1);
+  let room2 = resolveRoomByRef(updatedRooms, roomRef2);
+
+  if (!room1 || !room2) {
+    return { floorPlan, actions: [], error: `Could not find both rooms (got: "${roomRef1}" and "${roomRef2}")` };
+  }
+  if (room1.id === room2.id) {
+    return { floorPlan, actions: [], error: "Cannot connect a room to itself" };
+  }
+
+  const actions: string[] = [];
+
+  // If already adjacent, just ensure there is a direct door
+  let sharedWall = findSharedWall(room1, room2);
+
+  if (!sharedWall) {
+    const sideOrder: CardinalDirection[] = preferredSide
+      ? [preferredSide, "west", "east", "south", "north"].filter((v, i, arr) => arr.indexOf(v as CardinalDirection) === i) as CardinalDirection[]
+      : ["west", "east", "south", "north"];
+
+    const costs = sideOrder.map(side => {
+      const blockers = getRoomsTouchingSide(room1!, updatedRooms.filter(r => r.id !== room1!.id && r.id !== room2!.id), side);
+      const blockerArea = blockers.reduce((s, r) => s + r.width * r.height, 0);
+      return { side, blockers, cost: blockers.length * 1000 + blockerArea };
+    }).sort((a, b) => a.cost - b.cost);
+
+    const chosen = costs[0];
+    const moveSide = chosen.side;
+
+    // Shift blockers in cascade to make space for pairing
+    const shiftDelta = (moveSide === "east" || moveSide === "west") ? room2.width : room2.height;
+    if (chosen.blockers.length > 0) {
+      updatedRooms = cascadeShiftRooms(
+        updatedRooms,
+        chosen.blockers.map(r => r.id),
+        moveSide,
+        shiftDelta,
+        new Set([room1.id, room2.id])
+      );
+      actions.push(`Shifted ${chosen.blockers.length} room(s) ${moveSide} to make space`);
+    }
+
+    room1 = updatedRooms.find(r => r.id === room1!.id)!;
+    const movedRoom2 = updatedRooms.find(r => r.id === room2!.id)!;
+
+    // Place room2 directly adjacent to room1
+    let nx = movedRoom2.x;
+    let ny = movedRoom2.y;
+    if (moveSide === "west") {
+      nx = room1.x - movedRoom2.width;
+      ny = room1.y;
+    } else if (moveSide === "east") {
+      nx = room1.x + room1.width;
+      ny = room1.y;
+    } else if (moveSide === "north") {
+      nx = room1.x;
+      ny = room1.y - movedRoom2.height;
+    } else {
+      nx = room1.x;
+      ny = room1.y + room1.height;
+    }
+
+    updatedRooms = updatedRooms.map(r => r.id === movedRoom2.id ? { ...r, x: Math.round(nx), y: Math.round(ny) } : r);
+    actions.push(`Moved "${movedRoom2.name}" to ${moveSide} side of "${room1.name}"`);
+
+    // If any residual overlaps with moved room, push those rooms once in the same direction
+    const movedNow = updatedRooms.find(r => r.id === movedRoom2.id)!;
+    const overlapIds = updatedRooms
+      .filter(r => r.id !== movedNow.id && roomsOverlap(movedNow, r))
+      .map(r => r.id);
+    if (overlapIds.length > 0) {
+      updatedRooms = cascadeShiftRooms(
+        updatedRooms,
+        overlapIds,
+        moveSide,
+        shiftDelta,
+        new Set([room1.id, movedNow.id])
+      );
+      actions.push(`Resolved ${overlapIds.length} overlap(s) by shifting rooms ${moveSide}`);
+    }
+
+    updatedRooms = normalizeRoomCoordinates(updatedRooms);
+    room1 = updatedRooms.find(r => r.id === room1.id)!;
+    room2 = updatedRooms.find(r => r.id === movedRoom2.id)!;
+    sharedWall = findSharedWall(room1, room2);
+  }
+
+  const totalWidth = Math.max(...updatedRooms.map(r => r.x + r.width));
+  const totalHeight = Math.max(...updatedRooms.map(r => r.y + r.height));
+
+  let newPlan: FloorPlan = {
+    ...floorPlan,
+    rooms: updatedRooms,
+    doors: autoGenerateDoors(updatedRooms),
+    windows: autoGenerateWindows(updatedRooms),
+    totalWidth,
+    totalHeight,
+  };
+
+  // Ensure a direct door exists between paired rooms
+  if (sharedWall) {
+    const hasDirectDoor = newPlan.doors.some(d =>
+      (d.roomId1 === room1.id && d.roomId2 === room2.id) ||
+      (d.roomId1 === room2.id && d.roomId2 === room1.id)
+    );
+    if (!hasDirectDoor) {
+      const doorWidth = 90;
+      const directDoor: FloorPlanDoor = sharedWall.orientation === "horizontal"
+        ? {
+            id: generateId(),
+            roomId1: room1.id,
+            roomId2: room2.id,
+            x: Math.round(sharedWall.x + sharedWall.length / 2 - doorWidth / 2),
+            y: Math.round(sharedWall.y),
+            width: doorWidth,
+            orientation: "horizontal",
+          }
+        : {
+            id: generateId(),
+            roomId1: room1.id,
+            roomId2: room2.id,
+            x: Math.round(sharedWall.x),
+            y: Math.round(sharedWall.y + sharedWall.length / 2 - doorWidth / 2),
+            width: doorWidth,
+            orientation: "vertical",
+          };
+      newPlan = { ...newPlan, doors: [...newPlan.doors, directDoor] };
+      actions.push(`Added direct door between "${room1.name}" and "${room2.name}"`);
+    }
+  }
+
+  const { plan: repairedPlan, repairs } = autoRepairFloorPlan(newPlan);
+  if (repairs.length > 0) actions.push(...repairs);
+
+  if (!sharedWall) {
+    return {
+      floorPlan: repairedPlan,
+      actions,
+      error: `Could not place "${room2.name}" adjacent to "${room1.name}" with current constraints.`,
+    };
+  }
+
+  return { floorPlan: repairedPlan, actions };
+}
+
 // ─── Floor Plan Tool Processor ──────────────────────────────────────────────
 function processFloorPlanTool(
   name: string, args: Record<string, unknown>, floorPlan: FloorPlan
