@@ -79,9 +79,12 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
 
     // Convert screen coords to canvas coords
     const screenToCanvas = useCallback((clientX: number, clientY: number) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      const cx = clientX - (rect?.left ?? 0);
+      const cy = clientY - (rect?.top ?? 0);
       return {
-        x: (clientX - offset.x) / scale,
-        y: (clientY - offset.y) / scale,
+        x: (cx - offset.x) / scale,
+        y: (cy - offset.y) / scale,
       };
     }, [offset, scale]);
 
