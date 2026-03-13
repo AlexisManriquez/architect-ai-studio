@@ -996,26 +996,49 @@ const floorPlanTools = [
     type: "function",
     function: {
       name: "generate_floor_plan",
-      description: `Generate a complete floor plan. You provide the room list and target square footage — the backend physics engine handles all coordinate math, door placement, and window placement automatically. Just decide WHAT rooms are needed.`,
+      description: `Generate a complete floor plan using the template-based layout engine. Extract bedrooms, bathrooms, and sqft from the user's request. The engine automatically creates a realistic architectural layout with:
+- Central hallway spine connecting all private rooms
+- Kitchen/dining adjacent to living area (open concept)
+- Garage on the perimeter
+- Balanced left/right wings
+
+DEFAULTS (use when user doesn't specify):
+- Bedrooms: 3
+- Bathrooms: 2.5 (2 full + 1 half)
+- Square footage: 2000
+- Garage: included by default
+- "Half bath" = a small bathroom (powder room)
+
+Extract values from user input:
+- "2 bed 2 bath 2000 sqft" → bedrooms=2, bathrooms=2, sqft=2000
+- "2500 sqft house" → bedrooms=3 (default), bathrooms=2.5 (default), sqft=2500
+- "4 bedroom house" → bedrooms=4, bathrooms=2.5 (default), sqft=2000 (default)
+
+The engine builds the room list automatically from these parameters. You can optionally add extra rooms.`,
       parameters: {
         type: "object",
         properties: {
           name: { type: "string", description: "Name for the floor plan (e.g. 'Modern Ranch Home')" },
-          target_sqft: { type: "number", description: "Total approximate square footage of the house (e.g. 1500, 2200)" },
-          requested_rooms: {
+          target_sqft: { type: "number", description: "Total square footage. Default: 2000" },
+          bedrooms: { type: "number", description: "Number of bedrooms. Default: 3. The first bedroom is always a Master Bedroom (larger)." },
+          bathrooms: { type: "number", description: "Number of bathrooms. Default: 2.5. Use 0.5 increments for half baths (powder rooms). E.g. 2.5 = 2 full baths + 1 half bath." },
+          include_garage: { type: "boolean", description: "Whether to include a garage. Default: true." },
+          include_office: { type: "boolean", description: "Whether to include a home office. Default: false." },
+          include_laundry: { type: "boolean", description: "Whether to include a laundry room. Default: false." },
+          extra_rooms: {
             type: "array",
-            description: "List of rooms to include. Each entry is an object with 'type' (room identifier like 'living-room', 'bedroom-1', 'master-bedroom', 'kitchen', 'garage', etc.) and optional 'size' ('small', 'normal', or 'large'). Use 'size' when the user explicitly asks for a bigger or smaller room. Default is 'normal'.",
+            description: "Optional additional rooms beyond the standard set. Only use for special requests like 'add a pantry' or 'I want a sunroom'.",
             items: {
               type: "object",
               properties: {
-                type: { type: "string", description: "Room identifier, e.g. 'living-room', 'bedroom-1', 'master-bedroom', 'bathroom', 'garage', 'kitchen'" },
-                size: { type: "string", enum: ["small", "normal", "large"], description: "Room size modifier. 'small' = 60% of base area, 'normal' = 100%, 'large' = 160%. Default 'normal'." },
+                type: { type: "string" },
+                size: { type: "string", enum: ["small", "normal", "large"] },
               },
               required: ["type"],
             },
           },
         },
-        required: ["name", "target_sqft", "requested_rooms"],
+        required: ["name"],
         additionalProperties: false,
       },
     },
