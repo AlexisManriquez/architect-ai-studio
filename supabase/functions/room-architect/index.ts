@@ -1171,17 +1171,18 @@ const floorPlanTools = [
     type: "function",
     function: {
       name: "resize_room",
-      description: "Resize an existing room by ID.",
+      description: `Resize a room by specifying a target square footage. The engine will intelligently determine the best direction to expand or shrink:
+- If a wall has no adjacent room, it expands outward in that direction.
+- If surrounded by other rooms, it shifts neighbors to accommodate the new size.
+- Doors and windows are automatically re-snapped after resizing.
+Do NOT provide raw coordinates — just the room_id and target_sqft.`,
       parameters: {
         type: "object",
         properties: {
-          room_id: { type: "string" },
-          width: { type: "number" },
-          height: { type: "number" },
-          x: { type: "number" },
-          y: { type: "number" },
+          room_id: { type: "string", description: "ID of the room to resize" },
+          target_sqft: { type: "number", description: "Desired square footage for the room (e.g. 200, 350)" },
         },
-        required: ["room_id"],
+        required: ["room_id", "target_sqft"],
         additionalProperties: false,
       },
     },
