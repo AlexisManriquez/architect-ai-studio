@@ -1120,7 +1120,7 @@ Do NOT provide raw coordinates — just the room_id and target_sqft.`,
     type: "function",
     function: {
       name: "move_room",
-      description: "Move a room to a new position.",
+      description: "Move a room to an absolute position. After move, doors/windows are auto-regenerated and connectivity is auto-repaired.",
       parameters: {
         type: "object",
         properties: {
@@ -1129,6 +1129,23 @@ Do NOT provide raw coordinates — just the room_id and target_sqft.`,
           y: { type: "number" },
         },
         required: ["room_id", "x", "y"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "connect_rooms",
+      description: `Connect two rooms. If they are already adjacent, a door is added/ensured between them. If not adjacent, room_2 is moved adjacent to room_1 (pairing) and neighboring rooms are shifted to make space. Use this for requests like "connect master bathroom to master bedroom" or "pair room A with room B".`,
+      parameters: {
+        type: "object",
+        properties: {
+          room_1: { type: "string", description: "Room 1 reference: ID or name (e.g. 'Master Bedroom')" },
+          room_2: { type: "string", description: "Room 2 reference: ID or name (e.g. 'Master Bathroom')" },
+          preferred_side: { type: "string", enum: ["north", "south", "east", "west"], description: "Optional side of room_1 where room_2 should be placed." },
+        },
+        required: ["room_1", "room_2"],
         additionalProperties: false,
       },
     },
@@ -1484,6 +1501,247 @@ function snapWindowToWall(win: FloorPlanWindow, room: FloorPlanRoom): FloorPlanW
       break;
   }
   return corrected;
+}
+
+// ─── Room Pairing / Connection Helpers ──────────────────────────────────────
+type CardinalDirection = "north" | "south" | "east" | "west";
+
+function roomsOverlap(a: FloorPlanRoom, b: FloorPlanRoom): boolean {
+  const overlapX = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+  const overlapY = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  return overlapX > 1 && overlapY > 1;
+}
+
+function normalizeRoomCoordinates(rooms: FloorPlanRoom[]): FloorPlanRoom[] {
+  const minX = Math.min(...rooms.map(r => r.x));
+  const minY = Math.min(...rooms.map(r => r.y));
+  if (minX >= 0 && minY >= 0) return rooms;
+  const shiftX = minX < 0 ? -minX : 0;
+  const shiftY = minY < 0 ? -minY : 0;
+  return rooms.map(r => ({ ...r, x: r.x + shiftX, y: r.y + shiftY }));
+}
+
+function resolveRoomByRef(rooms: FloorPlanRoom[], roomRef: string): FloorPlanRoom | null {
+  if (!roomRef) return null;
+  const ref = roomRef.toLowerCase().trim();
+  const byId = rooms.find(r => r.id === roomRef);
+  if (byId) return byId;
+  const byExactName = rooms.find(r => r.name.toLowerCase() === ref);
+  if (byExactName) return byExactName;
+  const byContains = rooms.find(r => r.name.toLowerCase().includes(ref) || ref.includes(r.name.toLowerCase()));
+  return byContains || null;
+}
+
+function getRoomsTouchingSide(source: FloorPlanRoom, rooms: FloorPlanRoom[], side: CardinalDirection): FloorPlanRoom[] {
+  const TOLERANCE = 5;
+  const touching: FloorPlanRoom[] = [];
+  for (const other of rooms) {
+    if (other.id === source.id) continue;
+    if (side === "north" && Math.abs((other.y + other.height) - source.y) < TOLERANCE && Math.max(other.x, source.x) < Math.min(other.x + other.width, source.x + source.width) - TOLERANCE) {
+      touching.push(other);
+    }
+    if (side === "south" && Math.abs(other.y - (source.y + source.height)) < TOLERANCE && Math.max(other.x, source.x) < Math.min(other.x + other.width, source.x + source.width) - TOLERANCE) {
+      touching.push(other);
+    }
+    if (side === "west" && Math.abs((other.x + other.width) - source.x) < TOLERANCE && Math.max(other.y, source.y) < Math.min(other.y + other.height, source.y + source.height) - TOLERANCE) {
+      touching.push(other);
+    }
+    if (side === "east" && Math.abs(other.x - (source.x + source.width)) < TOLERANCE && Math.max(other.y, source.y) < Math.min(other.y + other.height, source.y + source.height) - TOLERANCE) {
+      touching.push(other);
+    }
+  }
+  return touching;
+}
+
+function cascadeShiftRooms(
+  rooms: FloorPlanRoom[],
+  seedRoomIds: string[],
+  side: CardinalDirection,
+  delta: number,
+  ignoreIds: Set<string> = new Set()
+): FloorPlanRoom[] {
+  const TOLERANCE = 5;
+  const toShift = new Set(seedRoomIds.filter(id => !ignoreIds.has(id)));
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const currentShifting = rooms.filter(r => toShift.has(r.id));
+    for (const source of currentShifting) {
+      for (const other of rooms) {
+        if (other.id === source.id || toShift.has(other.id) || ignoreIds.has(other.id)) continue;
+        let adjacent = false;
+        if (side === "south" && Math.abs(other.y - (source.y + source.height)) < TOLERANCE && Math.max(other.x, source.x) < Math.min(other.x + other.width, source.x + source.width) - TOLERANCE) adjacent = true;
+        if (side === "north" && Math.abs((other.y + other.height) - source.y) < TOLERANCE && Math.max(other.x, source.x) < Math.min(other.x + other.width, source.x + source.width) - TOLERANCE) adjacent = true;
+        if (side === "east" && Math.abs(other.x - (source.x + source.width)) < TOLERANCE && Math.max(other.y, source.y) < Math.min(other.y + other.height, source.y + source.height) - TOLERANCE) adjacent = true;
+        if (side === "west" && Math.abs((other.x + other.width) - source.x) < TOLERANCE && Math.max(other.y, source.y) < Math.min(other.y + other.height, source.y + source.height) - TOLERANCE) adjacent = true;
+        if (adjacent) {
+          toShift.add(other.id);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return rooms.map(r => {
+    if (!toShift.has(r.id)) return r;
+    if (side === "south") return { ...r, y: r.y + delta };
+    if (side === "north") return { ...r, y: r.y - delta };
+    if (side === "east") return { ...r, x: r.x + delta };
+    return { ...r, x: r.x - delta };
+  });
+}
+
+function connectOrPairRooms(
+  floorPlan: FloorPlan,
+  roomRef1: string,
+  roomRef2: string,
+  preferredSide?: CardinalDirection
+): { floorPlan: FloorPlan; actions: string[]; error?: string } {
+  let updatedRooms = floorPlan.rooms.map(r => ({ ...r }));
+  let room1 = resolveRoomByRef(updatedRooms, roomRef1);
+  let room2 = resolveRoomByRef(updatedRooms, roomRef2);
+
+  if (!room1 || !room2) {
+    return { floorPlan, actions: [], error: `Could not find both rooms (got: "${roomRef1}" and "${roomRef2}")` };
+  }
+  if (room1.id === room2.id) {
+    return { floorPlan, actions: [], error: "Cannot connect a room to itself" };
+  }
+
+  const actions: string[] = [];
+
+  // If already adjacent, just ensure there is a direct door
+  let sharedWall = findSharedWall(room1, room2);
+
+  if (!sharedWall) {
+    const sideOrder: CardinalDirection[] = preferredSide
+      ? [preferredSide, "west", "east", "south", "north"].filter((v, i, arr) => arr.indexOf(v as CardinalDirection) === i) as CardinalDirection[]
+      : ["west", "east", "south", "north"];
+
+    const costs = sideOrder.map(side => {
+      const blockers = getRoomsTouchingSide(room1!, updatedRooms.filter(r => r.id !== room1!.id && r.id !== room2!.id), side);
+      const blockerArea = blockers.reduce((s, r) => s + r.width * r.height, 0);
+      return { side, blockers, cost: blockers.length * 1000 + blockerArea };
+    }).sort((a, b) => a.cost - b.cost);
+
+    const chosen = costs[0];
+    const moveSide = chosen.side;
+
+    // Shift blockers in cascade to make space for pairing
+    const shiftDelta = (moveSide === "east" || moveSide === "west") ? room2.width : room2.height;
+    if (chosen.blockers.length > 0) {
+      updatedRooms = cascadeShiftRooms(
+        updatedRooms,
+        chosen.blockers.map(r => r.id),
+        moveSide,
+        shiftDelta,
+        new Set([room1.id, room2.id])
+      );
+      actions.push(`Shifted ${chosen.blockers.length} room(s) ${moveSide} to make space`);
+    }
+
+    room1 = updatedRooms.find(r => r.id === room1!.id)!;
+    const movedRoom2 = updatedRooms.find(r => r.id === room2!.id)!;
+
+    // Place room2 directly adjacent to room1
+    let nx = movedRoom2.x;
+    let ny = movedRoom2.y;
+    if (moveSide === "west") {
+      nx = room1.x - movedRoom2.width;
+      ny = room1.y;
+    } else if (moveSide === "east") {
+      nx = room1.x + room1.width;
+      ny = room1.y;
+    } else if (moveSide === "north") {
+      nx = room1.x;
+      ny = room1.y - movedRoom2.height;
+    } else {
+      nx = room1.x;
+      ny = room1.y + room1.height;
+    }
+
+    updatedRooms = updatedRooms.map(r => r.id === movedRoom2.id ? { ...r, x: Math.round(nx), y: Math.round(ny) } : r);
+    actions.push(`Moved "${movedRoom2.name}" to ${moveSide} side of "${room1.name}"`);
+
+    // If any residual overlaps with moved room, push those rooms once in the same direction
+    const movedNow = updatedRooms.find(r => r.id === movedRoom2.id)!;
+    const overlapIds = updatedRooms
+      .filter(r => r.id !== movedNow.id && roomsOverlap(movedNow, r))
+      .map(r => r.id);
+    if (overlapIds.length > 0) {
+      updatedRooms = cascadeShiftRooms(
+        updatedRooms,
+        overlapIds,
+        moveSide,
+        shiftDelta,
+        new Set([room1.id, movedNow.id])
+      );
+      actions.push(`Resolved ${overlapIds.length} overlap(s) by shifting rooms ${moveSide}`);
+    }
+
+    updatedRooms = normalizeRoomCoordinates(updatedRooms);
+    room1 = updatedRooms.find(r => r.id === room1.id)!;
+    room2 = updatedRooms.find(r => r.id === movedRoom2.id)!;
+    sharedWall = findSharedWall(room1, room2);
+  }
+
+  const totalWidth = Math.max(...updatedRooms.map(r => r.x + r.width));
+  const totalHeight = Math.max(...updatedRooms.map(r => r.y + r.height));
+
+  let newPlan: FloorPlan = {
+    ...floorPlan,
+    rooms: updatedRooms,
+    doors: autoGenerateDoors(updatedRooms),
+    windows: autoGenerateWindows(updatedRooms),
+    totalWidth,
+    totalHeight,
+  };
+
+  // Ensure a direct door exists between paired rooms
+  if (sharedWall) {
+    const hasDirectDoor = newPlan.doors.some(d =>
+      (d.roomId1 === room1.id && d.roomId2 === room2.id) ||
+      (d.roomId1 === room2.id && d.roomId2 === room1.id)
+    );
+    if (!hasDirectDoor) {
+      const doorWidth = 90;
+      const directDoor: FloorPlanDoor = sharedWall.orientation === "horizontal"
+        ? {
+            id: generateId(),
+            roomId1: room1.id,
+            roomId2: room2.id,
+            x: Math.round(sharedWall.x + sharedWall.length / 2 - doorWidth / 2),
+            y: Math.round(sharedWall.y),
+            width: doorWidth,
+            orientation: "horizontal",
+          }
+        : {
+            id: generateId(),
+            roomId1: room1.id,
+            roomId2: room2.id,
+            x: Math.round(sharedWall.x),
+            y: Math.round(sharedWall.y + sharedWall.length / 2 - doorWidth / 2),
+            width: doorWidth,
+            orientation: "vertical",
+          };
+      newPlan = { ...newPlan, doors: [...newPlan.doors, directDoor] };
+      actions.push(`Added direct door between "${room1.name}" and "${room2.name}"`);
+    }
+  }
+
+  const { plan: repairedPlan, repairs } = autoRepairFloorPlan(newPlan);
+  if (repairs.length > 0) actions.push(...repairs);
+
+  if (!sharedWall) {
+    return {
+      floorPlan: repairedPlan,
+      actions,
+      error: `Could not place "${room2.name}" adjacent to "${room1.name}" with current constraints.`,
+    };
+  }
+
+  return { floorPlan: repairedPlan, actions };
 }
 
 // ─── Floor Plan Tool Processor ──────────────────────────────────────────────
@@ -1953,15 +2211,70 @@ function processFloorPlanTool(
       const roomId = args.room_id as string;
       const room = floorPlan.rooms.find(r => r.id === roomId);
       if (!room) return { result: JSON.stringify({ success: false, reason: "Room not found" }), floorPlan };
-      const updated = {
+
+      let updatedRooms = floorPlan.rooms.map(r =>
+        r.id === roomId ? { ...r, x: Math.round(args.x as number), y: Math.round(args.y as number) } : { ...r }
+      );
+      updatedRooms = normalizeRoomCoordinates(updatedRooms);
+
+      const warnings = validateFloorPlanRooms(updatedRooms);
+      const totalWidth = Math.max(...updatedRooms.map(r => r.x + r.width));
+      const totalHeight = Math.max(...updatedRooms.map(r => r.y + r.height));
+
+      const movedPlan: FloorPlan = {
         ...floorPlan,
-        rooms: floorPlan.rooms.map(r => r.id === roomId ? {
-          ...r, x: Math.round(args.x as number), y: Math.round(args.y as number),
-        } : r),
+        rooms: updatedRooms,
+        doors: autoGenerateDoors(updatedRooms),
+        windows: autoGenerateWindows(updatedRooms),
+        totalWidth,
+        totalHeight,
       };
-      updated.totalWidth = Math.max(...updated.rooms.map(r => r.x + r.width));
-      updated.totalHeight = Math.max(...updated.rooms.map(r => r.y + r.height));
-      return { result: JSON.stringify({ success: true }), floorPlan: updated, action: `Moved ${room.name}` };
+
+      const { plan: repairedPlan, repairs } = autoRepairFloorPlan(movedPlan);
+
+      return {
+        result: JSON.stringify({
+          success: true,
+          warnings: warnings.length > 0 ? warnings : undefined,
+          repairs: repairs.length > 0 ? repairs : undefined,
+        }),
+        floorPlan: repairedPlan,
+        action: `Moved ${room.name}`,
+      };
+    }
+
+    case "connect_rooms": {
+      const roomRef1 = args.room_1 as string;
+      const roomRef2 = args.room_2 as string;
+      const preferredSide = args.preferred_side as CardinalDirection | undefined;
+
+      const roomA = resolveRoomByRef(floorPlan.rooms, roomRef1);
+      const roomB = resolveRoomByRef(floorPlan.rooms, roomRef2);
+      if (!roomA || !roomB) {
+        return {
+          result: JSON.stringify({ success: false, reason: `Could not find rooms "${roomRef1}" and/or "${roomRef2}"` }),
+          floorPlan,
+        };
+      }
+
+      const { floorPlan: updatedPlan, actions, error } = connectOrPairRooms(floorPlan, roomRef1, roomRef2, preferredSide);
+      const sharedWall = findSharedWall(
+        updatedPlan.rooms.find(r => r.id === roomA.id)!,
+        updatedPlan.rooms.find(r => r.id === roomB.id)!
+      );
+
+      return {
+        result: JSON.stringify({
+          success: !error,
+          connected: !!sharedWall,
+          actions,
+          error,
+        }),
+        floorPlan: updatedPlan,
+        action: error
+          ? `Attempted to connect ${roomA.name} and ${roomB.name}`
+          : `Connected ${roomA.name} ↔ ${roomB.name}`,
+      };
     }
 
     case "remove_room": {
@@ -2176,9 +2489,10 @@ ${ROOM_TYPES.join(", ")}
 1. **generate_floor_plan** — PRIMARY TOOL. Just provide bedrooms, bathrooms, sqft. The engine builds everything.
 2. **add_room** / **remove_room** / **move_room** — Fine-tune individual rooms after generation.
 3. **resize_room** — Smart resize: provide room_id + target_sqft. The engine will expand toward free walls or shift neighbors. Doors/windows are auto-regenerated. Do NOT calculate coordinates yourself.
-4. **add_door** / **add_window** — Add additional doors/windows if needed.
-5. **list_rooms** — Inspect current layout with IDs and positions.
-6. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
+4. **connect_rooms** — For adjacency/pairing requests. If rooms are not adjacent, it will move room_2 next to room_1 and shift neighbors to make space, then ensure a direct door.
+5. **add_door** / **add_window** — Add additional doors/windows if needed.
+6. **list_rooms** — Inspect current layout with IDs and positions.
+7. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
 
 ═══ SKETCH / IMAGE UPLOAD ═══
 When the user uploads a floor plan image, sketch, or blueprint:
@@ -2193,7 +2507,7 @@ When the user uploads a floor plan image, sketch, or blueprint:
 1. For text requests: Extract bedrooms/bathrooms/sqft → call **generate_floor_plan**.
 2. For image uploads: Call **generate_from_sketch** with explicit room coordinates.
 3. Review auto-inspection results.
-4. If issues exist, fix with add_door, move_room, resize_room.
+4. If issues exist, fix with connect_rooms, add_door, move_room, resize_room.
 5. Call **validate_floor_plan** to confirm.
 
 ═══ RESPONSE RULES ═══
@@ -2201,7 +2515,9 @@ When the user uploads a floor plan image, sketch, or blueprint:
 2. Be conversational and brief (1-3 sentences after executing actions).
 3. When recreating a sketch, first describe what you see, then generate using generate_from_sketch.
 4. ALWAYS call validate_floor_plan after generate_floor_plan or generate_from_sketch.
-5. For post-generation adjustments ("make the master bedroom bigger"), use resize_room with target_sqft.`;
+5. For post-generation adjustments ("make the master bedroom bigger"), use resize_room with target_sqft.
+6. For requests like "connect room A to room B" or "pair these rooms", use connect_rooms.
+7. NEVER claim a requested connection is infeasible without first trying connect_rooms and validation.`;
 }
 
 function buildRoomSystemPrompt(roomState: RoomState, roomName: string): string {
