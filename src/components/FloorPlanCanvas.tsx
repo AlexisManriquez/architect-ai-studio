@@ -3,6 +3,7 @@ import type { FloorPlan, FloorPlanRoom } from "@/types/floorplan";
 import { ROOM_TYPE_COLORS, ROOM_TYPE_LABELS } from "@/types/floorplan";
 import ActionLog, { type ActionEntry } from "@/components/ActionLog";
 import { useAppContext } from "@/context/AppContext";
+import { Pencil, Eraser } from "lucide-react";
 
 interface FloorPlanCanvasProps {
   floorPlan: FloorPlan;
