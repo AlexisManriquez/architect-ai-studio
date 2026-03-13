@@ -1191,7 +1191,19 @@ Example: User draws arrow from Garage upward toward Master Bedroom + says "expan
     type: "function",
     function: {
       name: "connect_rooms",
-      description: `Connect two rooms. If they are already adjacent, a door is added/ensured between them. If not adjacent, room_2 is moved adjacent to room_1 (pairing) and neighboring rooms are shifted to make space. The room_2's dimensions will be responsively reshaped (flush fit) to fit nicely against room_1. ALWAYS use this instead of move_room for relational positioning requests like "connect master bathroom to master bedroom" or "move room A next to room B".`,
+      description: `PHYSICALLY MOVES room_2 to be positioned adjacent to room_1, then adds a shared door. This tool changes room_2's POSITION (x, y coordinates) — it relocates the room.
+
+USE ONLY when the user wants to RELOCATE a room next to another room:
+- "put the bathroom next to the bedroom"
+- "move room A next to room B"
+- "place the office beside the master bedroom"
+
+DO NOT USE when:
+- The user wants to EXPAND or GROW a room toward another room → use snap_rooms_together
+- There is an annotation arrow between two rooms → use snap_rooms_together
+- The user says "expand X to Y", "extend X to meet Y", "fill gap between X and Y" → use snap_rooms_together
+
+WARNING: connect_rooms MOVES room_2. If the user wants to KEEP both rooms in place and just close the gap by expanding one wall, use snap_rooms_together instead.`,
       parameters: {
         type: "object",
         properties: {
@@ -2869,40 +2881,14 @@ function buildUserContent(text: string, images: string[] = []) {
 
 // ─── System Prompts ─────────────────────────────────────────────────────────
 
-function buildFloorPlanSystemPrompt(floorPlan: FloorPlan): string {
+function buildFloorPlanSystemPrompt(floorPlan: FloorPlan, selectedAgent: string): string {
   const roomsSummary = floorPlan.rooms.length === 0
     ? "No rooms yet — floor plan is empty."
     : "CURRENT ROOMS:\n" + floorPlan.rooms.map(r =>
         `  • ${r.name} [id: ${r.id}] type=${r.type} at (${r.x},${r.y}) ${r.width}×${r.height}cm (~${Math.round((r.width * r.height) / 929)} sqft)`
       ).join("\n");
 
-  return `You are an expert residential floor plan architect AI. You help users design house floor plans.
-
-YOU DO NOT NEED TO CALCULATE COORDINATES OR BUILD ROOM LISTS. The template-based layout engine handles everything. Your job is to:
-1. Listen to the user's request.
-2. Extract: number of bedrooms, number of bathrooms, and target square footage.
-3. Call generate_floor_plan with those values. The engine builds the full room list and layout automatically.
-
-═══ DEFAULT VALUES ═══
-If the user doesn't specify a value, use these defaults:
-- Bedrooms: 3
-- Bathrooms: 2.5 (2 full bathrooms + 1 half bath/powder room)
-- Square footage: 2000
-- Garage: included
-- Office: not included (unless asked)
-- Laundry: not included (unless asked)
-
-═══ EXTRACTION EXAMPLES ═══
-- "I want a 2 bed 2 bath house with 2000 sqft" → bedrooms=2, bathrooms=2, target_sqft=2000
-- "Build me a 2500 sqft house" → bedrooms=3 (default), bathrooms=2.5 (default), target_sqft=2500
-- "4 bedroom home" → bedrooms=4, bathrooms=2.5 (default), target_sqft=2000 (default)
-- "small 1 bedroom apartment" → bedrooms=1, bathrooms=1, target_sqft=600, include_garage=false
-- "3 bed 2.5 bath with office and laundry" → bedrooms=3, bathrooms=2.5, include_office=true, include_laundry=true
-
-YOU HAVE TWO INFORMATION SOURCES:
-1. A SCREENSHOT IMAGE of the current canvas (visual — examine it carefully!)
-2. PRECISE COORDINATE DATA below (numerical — use for exact positions when modifying)
-
+  const commonContext = `
 ═══ FLOOR PLAN: "${floorPlan.name}" ═══
 Bounding box: ${floorPlan.totalWidth}cm × ${floorPlan.totalHeight}cm
 ${roomsSummary}
@@ -2915,87 +2901,72 @@ Origin (0,0) = top-left corner. X → right, Y → down. All values in cm.
 
 ═══ ROOM TYPES ═══
 ${ROOM_TYPES.join(", ")}
+`;
+
+  if (selectedAgent === "CREATOR_AGENT") {
+    return `You are an expert residential floor plan creator AI. Your ONLY job is to create new floor plans (from text or sketch images).
+
+YOU DO NOT NEED TO CALCULATE COORDINATES OR BUILD ROOM LISTS. The template-based layout engine handles everything. Your job is to:
+1. Extract bedrooms, bathrooms, and target sqft explicitly from the user's instructions.
+2. Call generate_floor_plan with those values.
+
+═══ DEFAULT VALUES ═══
+- Bedrooms: 3
+- Bathrooms: 2.5 (2 full bathrooms + 1 half bath/powder room)
+- Square footage: 2000
+- Garage: included
+- Office/Laundry: not included (unless asked)
+
+If generating from a sketch, use generate_from_sketch and estimate fractions carefully.
+ALWAYS call validate_floor_plan after generating.
+${commonContext}`;
+  }
+
+  // MODIFIER_AGENT
+  return `You are an expert residential floor plan modifier AI. Your ONLY job is to edit and modify an existing layout precisely based on explicit instructions.
+
+IMPORTANT: You are receiving SYNTHESIZED INSTRUCTIONS from a Supervisor. The Supervisor has already interpreted the user's messy text and visual drawings to give you the exact intent. Execute exactly what the Supervisor tells you.
 
 ═══ TOOLS ═══
-1. **generate_floor_plan** — PRIMARY TOOL for creating a new house. Just provide bedrooms, bathrooms, sqft. The engine builds everything automatically.
-2. **snap_rooms_together(room_id, target_room_id)** — THE #1 TOOL for "expand room A to meet room B". Auto-detects direction and distance. Use whenever: an arrow is drawn between two rooms, or user says "expand X to Y", "extend X to meet Y", "fill the gap between X and Y", "connect X wall to Y".
-3. **connect_rooms(room_1_id, room_2_id)** — Places room_2 adjacent to room_1 and ensures a shared door. Use for relational positioning: "put bathroom next to bedroom", "attach garage to house".
-4. **resize_room(room_id, target_sqft)** — Resize a room by area. Use for "make the bedroom bigger/smaller" without specifying a direction.
-5. **reshape_room_boundary(room_id, wall, distance_cm)** — Move a specific wall by an exact distance. Use ONLY when user specifies a direction AND distance: "expand east by 2 meters", "push the north wall back 100cm".
-6. **add_room / remove_room / move_room** — Add, delete, or reposition individual rooms.
-7. **add_door / add_window** — Add openings to walls.
-8. **list_rooms** — Get current room IDs and positions.
-9. **validate_floor_plan** — Check connectivity. Run after generate_floor_plan or generate_from_sketch.
+- **snap_rooms_together(room_id, target_room_id)** — Expands a room's wall to meet another room to close a gap. USE THIS if instructed to expand one room to another.
+- **connect_rooms(room_1_id, room_2_id)** — Relocates/moves room_2 adjacent to room_1.
+- **reshape_room_boundary(room_id, wall, distance_cm)** — Moves a specific wall by an exact distance. USE THIS if instructed to push/pull a specific wall.
+- **resize_room(room_id, target_sqft)** — Resizes a room randomly outward/inward based on square footage.
+- **move_room** — Relocates to an absolute coordinate. Do NOT use this to expand a room.
 
-═══ VISUAL ANNOTATIONS (RED PENCIL MARKINGS) ═══
-The user may draw RED pencil annotations directly on the canvas. When you see red strokes in the screenshot:
+Execute the tool that best aligns with the Supervisor's instructions, then ALWAYS call validate_floor_plan. Be conversational and brief in your text response.
+${commonContext}`;
+}
 
-ARROW FROM ROOM A → ROOM B (most common)
-  → User wants room A's wall expanded to touch room B.
-  → Identify the source room (arrow start) and target room (arrow points toward).
-  → Call snap_rooms_together(room_id=source_room_id, target_room_id=target_room_id).
-  → DO NOT calculate distances. DO NOT use reshape_room_boundary. DO NOT use move_room.
-  → Example: Arrow drawn upward from Garage toward Master Bedroom:
-      snap_rooms_together(room_id=garage_id, target_room_id=master_bedroom_id)
+function buildSupervisorSystemPrompt(floorPlan: FloorPlan): string {
+  const roomsSummary = floorPlan.rooms.length === 0
+    ? "No rooms yet — floor plan is empty."
+    : "CURRENT ROOMS:\n" + floorPlan.rooms.map(r =>
+        `  • ${r.name} [id: ${r.id}] type=${r.type} at (${r.x},${r.y})`
+      ).join("\n");
 
-ARROW FROM WALL INTO EMPTY SPACE
-  → User wants to expand a wall outward.
-  → If user specifies distance: reshape_room_boundary(room_id, wall, distance_cm).
-  → If no distance: estimate from arrow length (short arrow ≈ 50cm, medium ≈ 150cm, long ≈ 300cm).
+  return `You are the Supervisor Router for an AI Architectural Floor Plan App.
+Your ONLY job is to analyze the user's intent (and any RED PENCIL VISUAL ANNOTATIONS on the screenshot) and determine if this is a CREATOR task (generating a new house from scratch) or a MODIFIER task (editing an existing floor plan layout).
 
-SCRIBBLE / X / ZIGZAG OVER A ROOM → Delete that room → remove_room(room_id)
+═══ VISUAL ANNOTATIONS (RED PENCIL) ═══
+- Red arrow from room A to room B → User wants room A expanded to touch room B.
+- Red arrow from a wall into empty space → User wants to expand that wall outward.
+- Scribble/X over a room → User wants to delete the room.
 
-RECTANGLE IN EMPTY SPACE → Add a room there → add_room with estimated position/size
+If you see an annotation, prioritize it over vague text. 
 
-LINE ALONG A WALL → add_window (exterior) or add_door (interior wall)
+═══ OUTPUT FORMAT ═══
+You must output ONLY raw JSON. Do not include markdown blocks.
+{
+  "selected_agent": "CREATOR_AGENT" | "MODIFIER_AGENT",
+  "reasoning": "Explain what the user wants based on the text and visual annotations.",
+  "synthesized_instruction": "A PERFECT, crystal clear instruction for the sub-agent. Examples: 'generate a 3 bed 2 bath 2000 sqft house', 'expand the garage to meet the master bedroom using snap_rooms_together(garage_id, master_bedroom_id)', 'move the north wall of bedroom-2 up by 150cm using reshape_room_boundary'."
+}
 
-RULES:
-1. Always combine the drawing with the user's text — text clarifies ambiguous annotations.
-2. For arrow-between-rooms: ALWAYS snap_rooms_together. Never guess coordinates.
-3. Do NOT use move_room when the intent is to expand/grow a room.
-4. If annotations are unclear and text doesn't help, describe what you see and ask.
-5. Red markings are temporary — they are cleared after your response.
+Current Floor Plan Context:
+${roomsSummary}
 
-═══ SKETCH / IMAGE UPLOAD ═══
-When the user uploads a floor plan image or sketch:
-1. Use **generate_from_sketch** — NOT generate_floor_plan.
-2. STEP 1 — INVENTORY: List every room with unique names.
-3. STEP 2 — SHAPE: Determine the overall house footprint shape.
-4. STEP 3 — GRID: Estimate each room's position as a fraction of total width/height.
-5. STEP 4 — COORDINATES: Convert to cm. Rooms MUST share exact edges (no gaps, no overlaps).
-6. Always call validate_floor_plan after generate_from_sketch.
-
-═══ COMMON REQUESTS & CORRECT TOOLS ═══
-- "Make master bedroom bigger" → resize_room(master_id, larger_sqft)
-- "Expand garage to meet master bedroom" → snap_rooms_together(garage_id, master_id)
-- "Fill the gap between garage and living room" → snap_rooms_together(garage_id, living_room_id)
-- "Add a bathroom next to bedroom 2" → connect_rooms(bedroom2_id, new_bathroom_id) after add_room
-- "Push the kitchen's north wall up by 2 meters" → reshape_room_boundary(kitchen_id, "north", 200)
-- "Remove the garage" → remove_room(garage_id)
-- "Add a home office" → add_room with type="office"
-- "Connect the living room and kitchen" → connect_rooms(living_id, kitchen_id)
-- "Add a window in the bedroom" → add_window(room_id, wall)
-- "Make the house bigger" → resize_room for individual rooms or generate_floor_plan with higher sqft
-- "Add a second floor" → Explain this is not supported yet; offer to add more rooms on the current floor
-
-═══ WORKFLOW ═══
-1. Text requests for new house: Extract bedrooms/bathrooms/sqft → generate_floor_plan → validate_floor_plan.
-2. Image/sketch uploads: generate_from_sketch → validate_floor_plan.
-3. Annotation arrows between rooms: snap_rooms_together(source, target).
-4. Annotation arrows into empty space: reshape_room_boundary with estimated or specified distance.
-5. Annotation scribbles/X marks: remove_room.
-6. Modifications: use the correct tool from COMMON REQUESTS above.
-7. After any structural change that might create connectivity issues: validate_floor_plan.
-
-═══ RESPONSE RULES ═══
-1. ALWAYS call generate_floor_plan when the user asks to create a house.
-2. Be conversational and brief (1-3 sentences after executing actions).
-3. ALWAYS call validate_floor_plan after generate_floor_plan or generate_from_sketch.
-4. For "expand X to Y", "extend X toward Y", "close the gap between X and Y", or any annotation arrow between two rooms: use snap_rooms_together — never calculate coordinates manually.
-5. For relational positioning ("bathroom next to bedroom", "attach X to Y"): use connect_rooms.
-6. For directional+distance requests ("expand east by 2m"): use reshape_room_boundary.
-7. NEVER use move_room to expand or grow a room. move_room only relocates — it doesn't expand.
-8. NEVER claim something is infeasible without first trying the appropriate tool.`;
+Look carefully at the image for red markings!`;
 }
 
 function buildRoomSystemPrompt(roomState: RoomState, roomName: string): string {
@@ -3065,16 +3036,81 @@ serve(async (req) => {
     const actionLog: string[] = [];
     const newItemIds: string[] = [];
 
-    const systemPrompt = isFloorPlanMode
-      ? buildFloorPlanSystemPrompt(currentFloorPlan)
-      : buildRoomSystemPrompt(currentRoomState, roomName || "Room");
+    // Hop 1: Supervisor (Only for Floor Plan Mode, Furniture Mode stays single agent)
+    let selectedAgent = "MODIFIER_AGENT";
+    let synthesizedInstruction = "";
 
-    const tools = isFloorPlanMode ? floorPlanTools : furnitureTools;
-
-    // Use Flash for text-only requests, Pro only when user uploads images (sketches)
     const hasUserImages = userImages && userImages.length > 0;
     const hasVisualContent = hasUserImages || hasAnnotations;
-    const model = hasVisualContent ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash";
+
+    if (isFloorPlanMode) {
+      const lastUserMsg = userMessages[userMessages.length - 1];
+      const allImages: string[] = [];
+      if (canvasScreenshot && currentFloorPlan.rooms.length > 0) {
+        allImages.push(canvasScreenshot);
+      }
+      if (userImages && userImages.length > 0) allImages.push(...userImages);
+
+      let messageText = lastUserMsg.content;
+      if (hasReferenceSketch && allImages.length > 1) {
+        messageText = `[REFERENCE: The second image is the ORIGINAL SKETCH that this floor plan is based on.]\n\n${messageText}`;
+      }
+
+      const supervisorUrl = useDirectGemini
+        ? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        : "https://ai.gateway.lovable.dev/v1/chat/completions";
+      const supervisorKey = useDirectGemini ? userApiKey : LOVABLE_API_KEY;
+      const supervisorModel = useDirectGemini 
+        ? (hasVisualContent ? "gemini-2.5-pro" : "gemini-2.5-flash") 
+        : (hasVisualContent ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash");
+
+      const supervisorMessages = [
+        { role: "system", content: buildSupervisorSystemPrompt(currentFloorPlan) },
+        ...userMessages.slice(0, -1).map((m: any) => ({ role: m.role, content: m.content })),
+        { role: "user", content: buildUserContent(messageText, allImages) }
+      ];
+
+      const supervisorRes = await fetch(supervisorUrl, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${supervisorKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: supervisorModel,
+          messages: supervisorMessages,
+          response_format: { type: "json_object" }
+        })
+      });
+
+      if (!supervisorRes.ok) {
+        throw new Error(`Supervisor gateway returned ${supervisorRes.status}`);
+      }
+      const supervisorData = await supervisorRes.json();
+      try {
+        const parsed = JSON.parse(supervisorData.choices[0].message.content);
+        selectedAgent = parsed.selected_agent || "MODIFIER_AGENT";
+        synthesizedInstruction = parsed.synthesized_instruction || messageText;
+        console.log("Supervisor output:", parsed);
+      } catch (e) {
+        console.warn("Supervisor parsing failed:", e);
+        selectedAgent = "MODIFIER_AGENT";
+        synthesizedInstruction = messageText;
+      }
+    }
+
+    const systemPrompt = isFloorPlanMode
+      ? buildFloorPlanSystemPrompt(currentFloorPlan, selectedAgent)
+      : buildRoomSystemPrompt(currentRoomState, roomName || "Room");
+
+    let tools: any[] = furnitureTools;
+    if (isFloorPlanMode) {
+      if (selectedAgent === "CREATOR_AGENT") {
+        tools = floorPlanTools.filter(t => ["generate_floor_plan", "generate_from_sketch", "validate_floor_plan", "list_rooms"].includes(t.function.name));
+      } else {
+        tools = floorPlanTools.filter(t => !["generate_floor_plan", "generate_from_sketch"].includes(t.function.name));
+      }
+    }
+
+    // Hop 2: Fast Tool Execution (Text Only)
+    const modelHop2 = useDirectGemini ? "gemini-2.5-flash" : "google/gemini-2.5-flash";
 
     // Build messages
     const aiMessages: Array<Record<string, unknown>> = [
@@ -3082,23 +3118,12 @@ serve(async (req) => {
     ];
 
     for (let i = 0; i < userMessages.length; i++) {
-      const msg = userMessages[i];
-      if (i === userMessages.length - 1 && msg.role === "user") {
-        const allImages: string[] = [];
-        // Only include screenshot if floor plan has rooms (skip empty canvas)
-        if (canvasScreenshot && !(isFloorPlanMode && currentFloorPlan.rooms.length === 0)) {
-          allImages.push(canvasScreenshot);
-        }
-        if (userImages && userImages.length > 0) allImages.push(...userImages);
-        
-        let messageText = msg.content;
-        if (hasReferenceSketch && allImages.length > 1) {
-          messageText = `[REFERENCE: The second image is the ORIGINAL SKETCH that this floor plan is based on. Compare your current layout against it and fix any discrepancies the user mentions.]\n\n${messageText}`;
-        }
-        
-        aiMessages.push({ role: "user", content: buildUserContent(messageText, allImages) });
+      if (i === userMessages.length - 1 && isFloorPlanMode) {
+        // Substitute the last message with the synthesized instruction (no image needed!)
+        aiMessages.push({ role: "user", content: synthesizedInstruction });
       } else {
-        aiMessages.push({ role: msg.role, content: msg.content });
+        // Keep prior chat history text
+        aiMessages.push({ role: userMessages[i].role, content: userMessages[i].content });
       }
     }
 
@@ -3141,9 +3166,7 @@ serve(async (req) => {
               ? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
               : "https://ai.gateway.lovable.dev/v1/chat/completions";
             const apiKey = useDirectGemini ? userApiKey : LOVABLE_API_KEY;
-            const apiModel = useDirectGemini
-              ? (hasVisualContent ? "gemini-2.5-pro" : "gemini-2.5-flash")
-              : model;
+            const apiModel = isFloorPlanMode ? modelHop2 : (useDirectGemini ? (hasVisualContent ? "gemini-2.5-pro" : "gemini-2.5-flash") : (hasVisualContent ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash"));
 
             const response = await fetch(apiUrl, {
               method: "POST",

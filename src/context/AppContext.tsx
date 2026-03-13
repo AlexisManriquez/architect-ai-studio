@@ -155,8 +155,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         floorPlanCanvasRef.current.clearAnnotations();
       }
 
+      // When annotations are present, inject a signal into the last user message
+      // so the AI is guaranteed to know about them even if visual detection fails
+      const messagesForAI = annotationsPresent
+        ? updatedMessages.map((m, i) => {
+            if (i === updatedMessages.length - 1 && m.role === "user") {
+              return {
+                role: m.role,
+                content: `[ANNOTATION: The user has drawn a RED annotation on the floor plan canvas. Look carefully at the red marking(s) in the screenshot image. If you see a red ARROW pointing FROM one room TOWARD another room, call snap_rooms_together(source_room_id, target_room_id) — do NOT call connect_rooms or move_room.]\n\n${m.content}`,
+              };
+            }
+            return { role: m.role, content: m.content };
+          })
+        : updatedMessages.map(m => ({ role: m.role, content: m.content }));
+
       const requestBody: Record<string, unknown> = {
-        messages: updatedMessages.map(m => ({ role: m.role, content: m.content })),
+        messages: messagesForAI,
         mode,
         canvasScreenshot,
         images: userImages,
