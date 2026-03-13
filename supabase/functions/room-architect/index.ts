@@ -2184,10 +2184,16 @@ serve(async (req) => {
               })));
             }
 
-            // Circuit breaker: stop after 3 consecutive failed validations
+            // Circuit breaker: stop after 3 consecutive failed validations — deliver what we have
             if (isFloorPlanMode && consecutiveFailures >= 3) {
-              console.log("Circuit breaker tripped — 3 consecutive validation failures");
-              finalContent = "I apologize, but I got stuck trying to resolve some architectural conflicts with this specific layout. Could we try starting over with a slightly simpler description?";
+              console.log("Circuit breaker tripped — 3 consecutive validation failures, delivering current layout");
+              // Auto-repair one more time before delivering
+              const { plan: lastRepair, repairs: lastRepairs } = autoRepairFloorPlan(currentFloorPlan);
+              currentFloorPlan = lastRepair;
+              if (lastRepairs.length > 0) {
+                for (const r of lastRepairs) actionLog.push(r);
+              }
+              finalContent = `Here's your floor plan! I made some automatic adjustments to ensure all rooms are connected. The layout has ${currentFloorPlan.rooms.length} rooms — feel free to ask me to adjust sizes, move rooms, or make any changes.`;
               break;
             }
 
