@@ -2208,10 +2208,11 @@ Do NOT use the resize_room tool afterwards if you can express the size intent up
 
 ═══ TOOLS ═══
 1. **generate_floor_plan** — Provide room list (with optional sizes) + target sqft. The engine handles coordinates, doors, and windows.
-2. **add_room** / **remove_room** / **resize_room** / **move_room** — Fine-tune individual rooms after generation.
-3. **add_door** / **add_window** — Add additional doors/windows if needed.
-4. **list_rooms** — Inspect current layout with IDs and positions.
-5. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
+2. **add_room** / **remove_room** / **move_room** — Fine-tune individual rooms after generation.
+3. **resize_room** — Smart resize: provide room_id + target_sqft. The engine will expand toward free walls or shift neighbors. Doors/windows are auto-regenerated. Do NOT calculate coordinates yourself.
+4. **add_door** / **add_window** — Add additional doors/windows if needed.
+5. **list_rooms** — Inspect current layout with IDs and positions.
+6. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
 
 ═══ SKETCH / IMAGE UPLOAD ═══
 When the user uploads a floor plan image, sketch, or blueprint:
