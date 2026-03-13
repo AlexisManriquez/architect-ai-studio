@@ -1137,7 +1137,7 @@ Do NOT provide raw coordinates — just the room_id and target_sqft.`,
     type: "function",
     function: {
       name: "connect_rooms",
-      description: `Connect two rooms. If they are already adjacent, a door is added/ensured between them. If not adjacent, room_2 is moved adjacent to room_1 (pairing) and neighboring rooms are shifted to make space. Use this for requests like "connect master bathroom to master bedroom" or "pair room A with room B".",
+      description: `Connect two rooms. If they are already adjacent, a door is added/ensured between them. If not adjacent, room_2 is moved adjacent to room_1 (pairing) and neighboring rooms are shifted to make space. Use this for requests like "connect master bathroom to master bedroom" or "pair room A with room B".`,
       parameters: {
         type: "object",
         properties: {
