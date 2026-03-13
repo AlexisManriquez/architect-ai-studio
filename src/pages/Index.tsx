@@ -20,6 +20,8 @@ const Index = () => {
     handleEnterRoom,
     handleBackToFloorPlan,
     handleSend,
+    annotationCount,
+    setAnnotationCount,
     roomCanvasRef,
     floorPlanCanvasRef,
   } = useAppContext();
@@ -68,6 +70,7 @@ const Index = () => {
           onSend={handleSend}
           onReset={handleReset}
           placeholders={chatPlaceholders}
+          annotationCount={mode === "floorplan" ? annotationCount : 0}
         />
       </div>
 
@@ -77,6 +80,7 @@ const Index = () => {
           floorPlan={floorPlan}
           actions={actions}
           onEnterRoom={handleEnterRoom}
+          onAnnotationChange={setAnnotationCount}
         />
       ) : activeRoom && roomStates[activeRoom.id] ? (
         <RoomCanvas

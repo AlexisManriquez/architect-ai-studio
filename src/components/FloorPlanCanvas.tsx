@@ -3,16 +3,20 @@ import type { FloorPlan, FloorPlanRoom } from "@/types/floorplan";
 import { ROOM_TYPE_COLORS, ROOM_TYPE_LABELS } from "@/types/floorplan";
 import ActionLog, { type ActionEntry } from "@/components/ActionLog";
 import { useAppContext } from "@/context/AppContext";
-import { Pencil, Eraser, MousePointer2 } from "lucide-react";
+import { Pencil, Eraser, Undo2 } from "lucide-react";
 
 interface FloorPlanCanvasProps {
   floorPlan: FloorPlan;
   actions?: ActionEntry[];
   onEnterRoom: (room: FloorPlanRoom) => void;
+  onAnnotationChange?: (count: number) => void;
 }
 
 export interface FloorPlanCanvasHandle {
   getSvgElement: () => SVGSVGElement | null;
+  hasAnnotations: () => boolean;
+  clearAnnotations: () => void;
+  getAnnotationCount: () => number;
 }
 
 const WALL_THICKNESS = 8;
@@ -30,7 +34,7 @@ interface Annotation {
 }
 
 const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
-  ({ floorPlan, actions = [], onEnterRoom }, ref) => {
+  ({ floorPlan, actions = [], onEnterRoom, onAnnotationChange }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const svgRef = useRef<SVGSVGElement>(null);
     const [scale, setScale] = useState(1);
@@ -52,9 +56,20 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
 
     const { updateRoomPosition, setFloorPlan } = useAppContext();
 
+    // Count real annotations (exclude in-progress temp stroke)
+    const realAnnotationCount = annotations.filter(a => a.id !== "__drawing__").length;
+
     useImperativeHandle(ref, () => ({
       getSvgElement: () => svgRef.current,
+      hasAnnotations: () => annotations.filter(a => a.id !== "__drawing__").length > 0,
+      clearAnnotations: () => setAnnotations([]),
+      getAnnotationCount: () => annotations.filter(a => a.id !== "__drawing__").length,
     }));
+
+    // Notify parent when annotation count changes
+    useEffect(() => {
+      onAnnotationChange?.(realAnnotationCount);
+    }, [realAnnotationCount, onAnnotationChange]);
 
     // Auto-fit on mount/resize
     useEffect(() => {
@@ -178,6 +193,14 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
 
     const clearAnnotations = useCallback(() => {
       setAnnotations([]);
+    }, []);
+
+    const undoLastStroke = useCallback(() => {
+      setAnnotations(prev => {
+        const real = prev.filter(a => a.id !== "__drawing__");
+        if (real.length === 0) return prev;
+        return real.slice(0, -1);
+      });
     }, []);
 
     // Check if a wall is shared with another room
@@ -354,11 +377,11 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
         {/* Stats bar */}
         <div className="absolute top-3 left-3 z-10 flex gap-2">
           <div className="bg-card/90 backdrop-blur-sm border border-border rounded-md px-3 py-1 text-xs text-muted-foreground">
-            🏠 {floorPlan.name || "Floor Plan"}
+            {floorPlan.name || "Floor Plan"}
           </div>
           {floorPlan.rooms.length > 0 && (
             <div className="bg-card/90 backdrop-blur-sm border border-border rounded-md px-3 py-1 text-xs text-muted-foreground">
-              🚪 {floorPlan.rooms.length} rooms · ~{totalSqft} sqft
+              {floorPlan.rooms.length} rooms · ~{totalSqft} sqft
             </div>
           )}
         </div>
@@ -372,18 +395,27 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
                 ? "bg-primary text-primary-foreground border-primary shadow-md"
                 : "bg-card/90 backdrop-blur-sm border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             }`}
-            title={drawMode ? "Switch to pointer mode" : "Draw annotations (mark where to place windows/doors)"}
+            title={drawMode ? "Switch to pointer mode" : "Draw annotations to guide the AI (arrows, marks, scribbles)"}
           >
-            {drawMode ? <Pencil className="w-4 h-4" /> : <Pencil className="w-4 h-4" />}
+            <Pencil className="w-4 h-4" />
           </button>
-          {annotations.length > 0 && (
-            <button
-              onClick={clearAnnotations}
-              className="w-9 h-9 rounded-md bg-card/90 backdrop-blur-sm border border-border flex items-center justify-center text-muted-foreground hover:bg-destructive hover:text-destructive-foreground transition-colors"
-              title="Clear all annotations"
-            >
-              <Eraser className="w-4 h-4" />
-            </button>
+          {realAnnotationCount > 0 && (
+            <>
+              <button
+                onClick={undoLastStroke}
+                className="w-9 h-9 rounded-md bg-card/90 backdrop-blur-sm border border-border flex items-center justify-center text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+                title="Undo last stroke"
+              >
+                <Undo2 className="w-4 h-4" />
+              </button>
+              <button
+                onClick={clearAnnotations}
+                className="w-9 h-9 rounded-md bg-card/90 backdrop-blur-sm border border-border flex items-center justify-center text-muted-foreground hover:bg-destructive hover:text-destructive-foreground transition-colors"
+                title="Clear all annotations"
+              >
+                <Eraser className="w-4 h-4" />
+              </button>
+            </>
           )}
         </div>
 
@@ -391,7 +423,16 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
         {drawMode && (
           <div className="absolute top-14 right-14 z-10">
             <div className="bg-primary/90 backdrop-blur-sm text-primary-foreground rounded-md px-3 py-1.5 text-xs font-medium shadow-md">
-              ✏️ Drawing mode — mark walls for windows/doors
+              Drawing mode — draw arrows, circles, or marks to guide the AI
+            </div>
+          </div>
+        )}
+
+        {/* Annotation pending indicator (when NOT in draw mode but annotations exist) */}
+        {!drawMode && realAnnotationCount > 0 && (
+          <div className="absolute top-14 right-14 z-10">
+            <div className="bg-orange-500/90 backdrop-blur-sm text-white rounded-md px-3 py-1.5 text-xs font-medium shadow-md">
+              {realAnnotationCount} annotation{realAnnotationCount !== 1 ? "s" : ""} will be sent with your next message
             </div>
           </div>
         )}
@@ -400,14 +441,14 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
         {floorPlan.rooms.length > 0 && !drawMode && (
           <div className="absolute bottom-12 left-3 z-10">
             <div className="bg-card/90 backdrop-blur-sm border border-border rounded-md px-3 py-1.5 text-xs text-muted-foreground">
-              Drag rooms to reposition · Double-click to enter & furnish · ✏️ Pencil to mark windows/doors
+              Drag rooms to reposition · Click to enter & furnish · Pencil to draw annotations for the AI
             </div>
           </div>
         )}
         {drawMode && (
           <div className="absolute bottom-12 left-3 z-10">
             <div className="bg-primary/10 backdrop-blur-sm border border-primary/30 rounded-md px-3 py-1.5 text-xs text-foreground">
-              Draw on walls to mark where you want windows or doors, then describe in chat
+              Draw arrows to expand walls, scribble to delete rooms, draw boxes to add rooms — then describe in chat
             </div>
           </div>
         )}
@@ -450,7 +491,7 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
           <button onClick={() => setScale((s) => Math.min(3, s * 1.2))}
             className="w-8 h-8 rounded bg-card border border-border flex items-center justify-center text-foreground hover:bg-accent text-lg font-bold">+</button>
           <button onClick={() => setScale((s) => Math.max(0.2, s * 0.8))}
-            className="w-8 h-8 rounded bg-card border border-border flex items-center justify-center text-foreground hover:bg-accent text-lg font-bold">−</button>
+            className="w-8 h-8 rounded bg-card border border-border flex items-center justify-center text-foreground hover:bg-accent text-lg font-bold">-</button>
         </div>
       </div>
     );

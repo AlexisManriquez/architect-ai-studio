@@ -18,6 +18,13 @@ function createEmptyFloorPlan(): FloorPlan {
   };
 }
 
+interface FloorPlanCanvasRef {
+  getSvgElement: () => SVGSVGElement | null;
+  hasAnnotations: () => boolean;
+  clearAnnotations: () => void;
+  getAnnotationCount: () => number;
+}
+
 interface AppContextValue {
   mode: AppMode;
   floorPlan: FloorPlan;
@@ -28,8 +35,10 @@ interface AppContextValue {
   highlightIds: string[];
   actions: ActionEntry[];
   referenceImages: string[];
+  annotationCount: number;
   setFloorPlan: React.Dispatch<React.SetStateAction<FloorPlan>>;
   setRoomStates: React.Dispatch<React.SetStateAction<Record<string, RoomState>>>;
+  setAnnotationCount: React.Dispatch<React.SetStateAction<number>>;
   handleReset: () => void;
   handleEnterRoom: (room: FloorPlanRoom) => void;
   handleBackToFloorPlan: () => void;
@@ -37,7 +46,7 @@ interface AppContextValue {
   updateItemPosition: (roomId: string, itemId: string, x: number, y: number) => void;
   updateRoomPosition: (roomId: string, newX: number, newY: number) => void;
   roomCanvasRef: React.RefObject<{ getSvgElement: () => SVGSVGElement | null } | null>;
-  floorPlanCanvasRef: React.RefObject<{ getSvgElement: () => SVGSVGElement | null } | null>;
+  floorPlanCanvasRef: React.RefObject<FloorPlanCanvasRef | null>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -52,8 +61,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [highlightIds, setHighlightIds] = useState<string[]>([]);
   const [actions, setActions] = useState<ActionEntry[]>([]);
   const [referenceImages, setReferenceImages] = useState<string[]>([]);
+  const [annotationCount, setAnnotationCount] = useState(0);
   const roomCanvasRef = useRef<{ getSvgElement: () => SVGSVGElement | null }>(null);
-  const floorPlanCanvasRef = useRef<{ getSvgElement: () => SVGSVGElement | null }>(null);
+  const floorPlanCanvasRef = useRef<FloorPlanCanvasRef>(null);
 
   const handleReset = useCallback(() => {
     if (mode === "room" && activeRoom) {
@@ -136,12 +146,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      // Check for annotations BEFORE clearing them
+      const annotationsPresent = mode === "floorplan"
+        && floorPlanCanvasRef.current?.hasAnnotations?.() || false;
+
+      // Clear annotations after screenshot capture (they're baked into the screenshot)
+      if (mode === "floorplan" && floorPlanCanvasRef.current?.hasAnnotations?.()) {
+        floorPlanCanvasRef.current.clearAnnotations();
+      }
+
       const requestBody: Record<string, unknown> = {
         messages: updatedMessages.map(m => ({ role: m.role, content: m.content })),
         mode,
         canvasScreenshot,
         images: userImages,
         hasReferenceSketch: false,
+        hasAnnotations: annotationsPresent,
       };
 
       if (mode === "floorplan") {
@@ -284,8 +304,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         highlightIds,
         actions,
         referenceImages,
+        annotationCount,
         setFloorPlan,
         setRoomStates,
+        setAnnotationCount,
         handleReset,
         handleEnterRoom,
         handleBackToFloorPlan,

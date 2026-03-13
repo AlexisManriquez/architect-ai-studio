@@ -12,9 +12,10 @@ interface ChatPanelProps {
   onSend: (message: string, images?: string[]) => void;
   onReset: () => void;
   placeholders?: string[];
+  annotationCount?: number;
 }
 
-export default function ChatPanel({ messages, isLoading, onSend, onReset, placeholders }: ChatPanelProps) {
+export default function ChatPanel({ messages, isLoading, onSend, onReset, placeholders, annotationCount }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [pendingImages, setPendingImages] = useState<{ base64: string; preview: string }[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -166,9 +167,16 @@ export default function ChatPanel({ messages, isLoading, onSend, onReset, placeh
         <Button type="button" variant="ghost" size="icon" onClick={onReset} title="Reset">
           <RotateCcw className="w-4 h-4" />
         </Button>
-        <Button type="submit" size="icon" disabled={isLoading || (!input.trim() && pendingImages.length === 0)}>
-          <Send className="w-4 h-4" />
-        </Button>
+        <div className="relative">
+          <Button type="submit" size="icon" disabled={isLoading || (!input.trim() && pendingImages.length === 0)}>
+            <Send className="w-4 h-4" />
+          </Button>
+          {annotationCount != null && annotationCount > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] flex items-center justify-center pointer-events-none">
+              {annotationCount}
+            </span>
+          )}
+        </div>
       </form>
     </div>
   );

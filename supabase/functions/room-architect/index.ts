@@ -1119,6 +1119,30 @@ Do NOT provide raw coordinates — just the room_id and target_sqft.`,
   {
     type: "function",
     function: {
+      name: "reshape_room_boundary",
+      description: `Move a specific wall of a room by a given distance. Use this for directional wall manipulation — e.g., "pull the north wall up by 150cm" or "push the east wall out by 200cm".
+- Positive distance_cm = expand outward (wall moves away from room center).
+- Negative distance_cm = contract inward (wall moves toward room center).
+- If the wall has adjacent rooms, they will be cascade-shifted to make space.
+- Doors and windows are auto-regenerated after reshaping.
+- Nearby room edges within 20cm are auto-snapped flush to prevent small gaps.
+- Minimum room dimension: 120cm on any axis.
+Use this when the user draws arrows on a specific wall, or says things like "expand the bedroom to the right by 2 meters" or "shrink the kitchen on the west side".`,
+      parameters: {
+        type: "object",
+        properties: {
+          room_id: { type: "string", description: "ID of the room whose wall to move" },
+          wall: { type: "string", enum: ["north", "south", "east", "west"], description: "Which wall to move" },
+          distance_cm: { type: "number", description: "Distance to move the wall in cm. Positive = expand outward, negative = contract inward. E.g., 150 means expand 150cm, -100 means shrink 100cm." },
+        },
+        required: ["room_id", "wall", "distance_cm"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "move_room",
       description: "Move a room to an absolute coordinate position. DO NOT use this tool if the user asks to place a room next to another room (e.g. 'move bathroom next to bedroom' or 'connect garage to house'). Use connect_rooms instead.",
       parameters: {
@@ -1519,6 +1543,87 @@ function normalizeRoomCoordinates(rooms: FloorPlanRoom[]): FloorPlanRoom[] {
   const shiftX = minX < 0 ? -minX : 0;
   const shiftY = minY < 0 ? -minY : 0;
   return rooms.map(r => ({ ...r, x: r.x + shiftX, y: r.y + shiftY }));
+}
+
+// ─── Shared Wall Detection & Cascade Helpers ────────────────────────────────
+const WALL_DETECT_TOLERANCE = 5;
+
+function detectBlockedWalls(
+  room: FloorPlanRoom,
+  allRooms: FloorPlanRoom[]
+): { blocked: Record<CardinalDirection, FloorPlanRoom[]>; free: CardinalDirection[] } {
+  const otherRooms = allRooms.filter(r => r.id !== room.id);
+  const blocked: Record<CardinalDirection, FloorPlanRoom[]> = { north: [], south: [], east: [], west: [] };
+
+  for (const other of otherRooms) {
+    if (Math.abs((other.y + other.height) - room.y) < WALL_DETECT_TOLERANCE &&
+        Math.max(other.x, room.x) < Math.min(other.x + other.width, room.x + room.width) - WALL_DETECT_TOLERANCE) {
+      blocked.north.push(other);
+    }
+    if (Math.abs(other.y - (room.y + room.height)) < WALL_DETECT_TOLERANCE &&
+        Math.max(other.x, room.x) < Math.min(other.x + other.width, room.x + room.width) - WALL_DETECT_TOLERANCE) {
+      blocked.south.push(other);
+    }
+    if (Math.abs((other.x + other.width) - room.x) < WALL_DETECT_TOLERANCE &&
+        Math.max(other.y, room.y) < Math.min(other.y + other.height, room.y + room.height) - WALL_DETECT_TOLERANCE) {
+      blocked.west.push(other);
+    }
+    if (Math.abs(other.x - (room.x + room.width)) < WALL_DETECT_TOLERANCE &&
+        Math.max(other.y, room.y) < Math.min(other.y + other.height, room.y + room.height) - WALL_DETECT_TOLERANCE) {
+      blocked.east.push(other);
+    }
+  }
+
+  const free: CardinalDirection[] = [];
+  for (const dir of ["south", "east", "north", "west"] as CardinalDirection[]) {
+    if (blocked[dir].length === 0) free.push(dir);
+  }
+
+  return { blocked, free };
+}
+
+function collectCascadeShifts(
+  initialBlockers: FloorPlanRoom[],
+  direction: CardinalDirection,
+  allRooms: FloorPlanRoom[],
+  excludeId: string
+): Set<string> {
+  const roomsToShift = new Set<string>();
+
+  const collect = (sourceRoom: FloorPlanRoom, dir: CardinalDirection) => {
+    for (const other of allRooms) {
+      if (other.id === sourceRoom.id || roomsToShift.has(other.id)) continue;
+      if (other.id === excludeId) continue;
+      let adjacent = false;
+      if (dir === "south" && Math.abs(other.y - (sourceRoom.y + sourceRoom.height)) < WALL_DETECT_TOLERANCE &&
+          Math.max(other.x, sourceRoom.x) < Math.min(other.x + other.width, sourceRoom.x + sourceRoom.width) - WALL_DETECT_TOLERANCE) {
+        adjacent = true;
+      }
+      if (dir === "north" && Math.abs((other.y + other.height) - sourceRoom.y) < WALL_DETECT_TOLERANCE &&
+          Math.max(other.x, sourceRoom.x) < Math.min(other.x + other.width, sourceRoom.x + sourceRoom.width) - WALL_DETECT_TOLERANCE) {
+        adjacent = true;
+      }
+      if (dir === "east" && Math.abs(other.x - (sourceRoom.x + sourceRoom.width)) < WALL_DETECT_TOLERANCE &&
+          Math.max(other.y, sourceRoom.y) < Math.min(other.y + other.height, sourceRoom.y + sourceRoom.height) - WALL_DETECT_TOLERANCE) {
+        adjacent = true;
+      }
+      if (dir === "west" && Math.abs((other.x + other.width) - sourceRoom.x) < WALL_DETECT_TOLERANCE &&
+          Math.max(other.y, sourceRoom.y) < Math.min(other.y + other.height, sourceRoom.y + sourceRoom.height) - WALL_DETECT_TOLERANCE) {
+        adjacent = true;
+      }
+      if (adjacent) {
+        roomsToShift.add(other.id);
+        collect(other, dir);
+      }
+    }
+  };
+
+  for (const blocker of initialBlockers) {
+    roomsToShift.add(blocker.id);
+    collect(blocker, direction);
+  }
+
+  return roomsToShift;
 }
 
 function resolveRoomByRef(rooms: FloorPlanRoom[], roomRef: string): FloorPlanRoom | null {
@@ -2129,56 +2234,18 @@ function processFloorPlanTool(
       const areaRatio = targetAreaCm2 / currentAreaCm2;
       const isExpanding = areaRatio > 1;
 
-      // Determine which walls are "free" (no adjacent room within tolerance)
-      const TOLERANCE = 5;
-      const otherRooms = floorPlan.rooms.filter(r => r.id !== roomId);
+      const { blocked: blockedWalls, free: freeWalls } = detectBlockedWalls(room, floorPlan.rooms);
 
-      type Direction = "north" | "south" | "east" | "west";
-      const freeWalls: Direction[] = [];
-      const blockedWalls: Record<Direction, FloorPlanRoom[]> = { north: [], south: [], east: [], west: [] };
-
-      for (const other of otherRooms) {
-        // North wall (room.y): another room's bottom edge touches it
-        if (Math.abs((other.y + other.height) - room.y) < TOLERANCE &&
-            Math.max(other.x, room.x) < Math.min(other.x + other.width, room.x + room.width) - TOLERANCE) {
-          blockedWalls.north.push(other);
-        }
-        // South wall (room.y + room.height): another room's top edge touches it
-        if (Math.abs(other.y - (room.y + room.height)) < TOLERANCE &&
-            Math.max(other.x, room.x) < Math.min(other.x + other.width, room.x + room.width) - TOLERANCE) {
-          blockedWalls.south.push(other);
-        }
-        // West wall (room.x): another room's right edge touches it
-        if (Math.abs((other.x + other.width) - room.x) < TOLERANCE &&
-            Math.max(other.y, room.y) < Math.min(other.y + other.height, room.y + room.height) - TOLERANCE) {
-          blockedWalls.west.push(other);
-        }
-        // East wall (room.x + room.width): another room's left edge touches it
-        if (Math.abs(other.x - (room.x + room.width)) < TOLERANCE &&
-            Math.max(other.y, room.y) < Math.min(other.y + other.height, room.y + room.height) - TOLERANCE) {
-          blockedWalls.east.push(other);
-        }
-      }
-
-      for (const dir of ["south", "east", "north", "west"] as Direction[]) {
-        if (blockedWalls[dir].length === 0) freeWalls.push(dir);
-      }
-
-      // Calculate how much to grow/shrink
-      const deltaCm2 = targetAreaCm2 - currentAreaCm2;
       const actions: string[] = [];
       let updatedRooms = [...floorPlan.rooms];
       const roomIdx = updatedRooms.findIndex(r => r.id === roomId);
       let r = { ...updatedRooms[roomIdx] };
 
       if (freeWalls.length > 0 || !isExpanding) {
-        // Strategy: expand/shrink toward free walls, maintaining aspect ratio if possible
-        // Prefer south/east for expansion (grow "outward"), north/west for shrinkage
-        const preferredExpand: Direction[] = freeWalls.filter(d => d === "south" || d === "east");
+        const preferredExpand = freeWalls.filter(d => d === "south" || d === "east");
         const expandDirs = preferredExpand.length > 0 ? preferredExpand : freeWalls;
 
         if (expandDirs.includes("south") || expandDirs.includes("north")) {
-          // Adjust height
           const newHeight = Math.round(targetAreaCm2 / r.width);
           const deltaH = newHeight - r.height;
           if (expandDirs.includes("south")) {
@@ -2190,7 +2257,6 @@ function processFloorPlanTool(
             actions.push(`Expanded ${r.name} northward by ${Math.abs(deltaH)}cm`);
           }
         } else if (expandDirs.includes("east") || expandDirs.includes("west")) {
-          // Adjust width
           const newWidth = Math.round(targetAreaCm2 / r.height);
           const deltaW = newWidth - r.width;
           if (expandDirs.includes("east")) {
@@ -2203,17 +2269,15 @@ function processFloorPlanTool(
           }
         }
       } else {
-        // All walls blocked — need to push neighbors
-        // Pick the direction with the fewest/smallest neighbors to push
-        const dirCosts: { dir: Direction; cost: number }[] = [];
-        for (const dir of ["south", "east", "north", "west"] as Direction[]) {
+        // All walls blocked — pick direction with fewest/smallest neighbors to push
+        const dirCosts: { dir: CardinalDirection; cost: number }[] = [];
+        for (const dir of ["south", "east", "north", "west"] as CardinalDirection[]) {
           const totalBlockerArea = blockedWalls[dir].reduce((s, br) => s + br.width * br.height, 0);
           dirCosts.push({ dir, cost: blockedWalls[dir].length * 1000 + totalBlockerArea });
         }
         dirCosts.sort((a, b) => a.cost - b.cost);
         const pushDir = dirCosts[0].dir;
 
-        // Calculate expansion amount
         let deltaSize: number;
         if (pushDir === "south" || pushDir === "north") {
           const newHeight = Math.round(targetAreaCm2 / r.width);
@@ -2223,43 +2287,8 @@ function processFloorPlanTool(
           deltaSize = newWidth - r.width;
         }
 
-        // Recursively collect all rooms that need to shift in the push direction
-        const roomsToShift = new Set<string>();
-        const collectShifts = (sourceRoom: FloorPlanRoom, dir: Direction) => {
-          for (const other of updatedRooms) {
-            if (other.id === sourceRoom.id || roomsToShift.has(other.id)) continue;
-            if (other.id === roomId) continue; // Don't shift the target room
-            let adjacent = false;
-            if (dir === "south" && Math.abs(other.y - (sourceRoom.y + sourceRoom.height)) < TOLERANCE &&
-                Math.max(other.x, sourceRoom.x) < Math.min(other.x + other.width, sourceRoom.x + sourceRoom.width) - TOLERANCE) {
-              adjacent = true;
-            }
-            if (dir === "north" && Math.abs((other.y + other.height) - sourceRoom.y) < TOLERANCE &&
-                Math.max(other.x, sourceRoom.x) < Math.min(other.x + other.width, sourceRoom.x + sourceRoom.width) - TOLERANCE) {
-              adjacent = true;
-            }
-            if (dir === "east" && Math.abs(other.x - (sourceRoom.x + sourceRoom.width)) < TOLERANCE &&
-                Math.max(other.y, sourceRoom.y) < Math.min(other.y + other.height, sourceRoom.y + sourceRoom.height) - TOLERANCE) {
-              adjacent = true;
-            }
-            if (dir === "west" && Math.abs((other.x + other.width) - sourceRoom.x) < TOLERANCE &&
-                Math.max(other.y, sourceRoom.y) < Math.min(other.y + other.height, sourceRoom.y + sourceRoom.height) - TOLERANCE) {
-              adjacent = true;
-            }
-            if (adjacent) {
-              roomsToShift.add(other.id);
-              collectShifts(other, dir); // Cascade: rooms behind this one also need to shift
-            }
-          }
-        };
+        const roomsToShift = collectCascadeShifts(blockedWalls[pushDir], pushDir, updatedRooms, roomId);
 
-        // Collect direct blockers and their cascading neighbors
-        for (const blocker of blockedWalls[pushDir]) {
-          roomsToShift.add(blocker.id);
-          collectShifts(blocker, pushDir);
-        }
-
-        // Apply the expansion to target room
         if (pushDir === "south") {
           r.height = Math.round(targetAreaCm2 / r.width);
         } else if (pushDir === "north") {
@@ -2274,7 +2303,6 @@ function processFloorPlanTool(
           r.width = newWidth;
         }
 
-        // Shift all affected rooms
         const absDelta = Math.abs(deltaSize);
         updatedRooms = updatedRooms.map(rm => {
           if (!roomsToShift.has(rm.id)) return rm;
@@ -2289,33 +2317,21 @@ function processFloorPlanTool(
         actions.push(`Expanded ${r.name} ${pushDir}ward, shifted ${roomsToShift.size} neighbor(s)`);
       }
 
-      // Ensure no negative coordinates
       updatedRooms[roomIdx] = r;
-      const minRoomX = Math.min(...updatedRooms.map(rm => rm.x));
-      const minRoomY = Math.min(...updatedRooms.map(rm => rm.y));
-      if (minRoomX < 0 || minRoomY < 0) {
-        const shiftX = minRoomX < 0 ? -minRoomX : 0;
-        const shiftY = minRoomY < 0 ? -minRoomY : 0;
-        updatedRooms = updatedRooms.map(rm => ({ ...rm, x: rm.x + shiftX, y: rm.y + shiftY }));
-      }
+      updatedRooms = normalizeRoomCoordinates(updatedRooms);
 
       const newTotalWidth = Math.max(...updatedRooms.map(rm => rm.x + rm.width));
       const newTotalHeight = Math.max(...updatedRooms.map(rm => rm.y + rm.height));
 
-      // Re-generate doors and windows for the updated layout
-      const newDoors = autoGenerateDoors(updatedRooms);
-      const newWindows = autoGenerateWindows(updatedRooms);
-
       const newPlan: FloorPlan = {
         ...floorPlan,
         rooms: updatedRooms,
-        doors: newDoors,
-        windows: newWindows,
+        doors: autoGenerateDoors(updatedRooms),
+        windows: autoGenerateWindows(updatedRooms),
         totalWidth: newTotalWidth,
         totalHeight: newTotalHeight,
       };
 
-      // Auto-repair connectivity
       const { plan: repairedPlan, repairs } = autoRepairFloorPlan(newPlan);
 
       const newSqft = Math.round((r.width * r.height) / 929);
@@ -2330,6 +2346,145 @@ function processFloorPlanTool(
         }),
         floorPlan: repairedPlan,
         action: `Resized ${room.name} → ~${newSqft} sqft`,
+      };
+    }
+
+    case "reshape_room_boundary": {
+      const roomId = args.room_id as string;
+      const wall = args.wall as CardinalDirection;
+      const distanceCm = Math.round(args.distance_cm as number);
+      const room = floorPlan.rooms.find(r => r.id === roomId);
+      if (!room) return { result: JSON.stringify({ success: false, reason: "Room not found" }), floorPlan };
+      if (!wall || !["north", "south", "east", "west"].includes(wall)) {
+        return { result: JSON.stringify({ success: false, reason: "wall must be north, south, east, or west" }), floorPlan };
+      }
+      if (!distanceCm || distanceCm === 0) {
+        return { result: JSON.stringify({ success: false, reason: "distance_cm must be non-zero" }), floorPlan };
+      }
+
+      // Enforce minimum room dimensions (120cm on any axis)
+      const MIN_DIM = 120;
+      let clampedDistance = distanceCm;
+      const isVertical = wall === "north" || wall === "south";
+      const currentDim = isVertical ? room.height : room.width;
+      // Positive = expand outward, negative = contract inward
+      const newDim = currentDim + Math.abs(clampedDistance) * (clampedDistance > 0 ? 1 : -1);
+      if (newDim < MIN_DIM) {
+        clampedDistance = -(currentDim - MIN_DIM); // clamp to minimum
+        if (Math.abs(clampedDistance) < 1) {
+          return { result: JSON.stringify({ success: false, reason: `Room is already at minimum dimension (${MIN_DIM}cm). Cannot shrink further.` }), floorPlan };
+        }
+      }
+
+      const { blocked: blockedWalls } = detectBlockedWalls(room, floorPlan.rooms);
+      const isBlocked = blockedWalls[wall].length > 0;
+      const isExpanding = clampedDistance > 0;
+      const absDist = Math.abs(clampedDistance);
+
+      const actions: string[] = [];
+      let updatedRooms = [...floorPlan.rooms];
+      const roomIdx = updatedRooms.findIndex(r => r.id === roomId);
+      let r = { ...updatedRooms[roomIdx] };
+
+      // Apply the wall movement
+      if (wall === "north") {
+        r.y = isExpanding ? r.y - absDist : r.y + absDist;
+        r.height = isExpanding ? r.height + absDist : r.height - absDist;
+      } else if (wall === "south") {
+        r.height = isExpanding ? r.height + absDist : r.height - absDist;
+      } else if (wall === "west") {
+        r.x = isExpanding ? r.x - absDist : r.x + absDist;
+        r.width = isExpanding ? r.width + absDist : r.width - absDist;
+      } else { // east
+        r.width = isExpanding ? r.width + absDist : r.width - absDist;
+      }
+
+      // Snap logic: if the moved wall edge is within 20cm of a neighbor's edge, snap flush
+      const SNAP_THRESHOLD = 20;
+      for (const other of updatedRooms) {
+        if (other.id === roomId) continue;
+        if (wall === "north") {
+          const otherBottom = other.y + other.height;
+          const gap = Math.abs(r.y - otherBottom);
+          if (gap > 0 && gap < SNAP_THRESHOLD && Math.max(other.x, r.x) < Math.min(other.x + other.width, r.x + r.width)) {
+            const snapDelta = r.y - otherBottom;
+            r.y = otherBottom;
+            r.height += snapDelta;
+            actions.push(`Snapped ${r.name} north wall flush to ${other.name}`);
+          }
+        } else if (wall === "south") {
+          const roomBottom = r.y + r.height;
+          const gap = Math.abs(roomBottom - other.y);
+          if (gap > 0 && gap < SNAP_THRESHOLD && Math.max(other.x, r.x) < Math.min(other.x + other.width, r.x + r.width)) {
+            r.height += (other.y - roomBottom);
+            actions.push(`Snapped ${r.name} south wall flush to ${other.name}`);
+          }
+        } else if (wall === "west") {
+          const otherRight = other.x + other.width;
+          const gap = Math.abs(r.x - otherRight);
+          if (gap > 0 && gap < SNAP_THRESHOLD && Math.max(other.y, r.y) < Math.min(other.y + other.height, r.y + r.height)) {
+            const snapDelta = r.x - otherRight;
+            r.x = otherRight;
+            r.width += snapDelta;
+            actions.push(`Snapped ${r.name} west wall flush to ${other.name}`);
+          }
+        } else { // east
+          const roomRight = r.x + r.width;
+          const gap = Math.abs(roomRight - other.x);
+          if (gap > 0 && gap < SNAP_THRESHOLD && Math.max(other.y, r.y) < Math.min(other.y + other.height, r.y + r.height)) {
+            r.width += (other.x - roomRight);
+            actions.push(`Snapped ${r.name} east wall flush to ${other.name}`);
+          }
+        }
+      }
+
+      // If blocked, cascade-shift neighbors
+      if (isBlocked && isExpanding) {
+        const roomsToShift = collectCascadeShifts(blockedWalls[wall], wall, updatedRooms, roomId);
+        updatedRooms = updatedRooms.map(rm => {
+          if (!roomsToShift.has(rm.id)) return rm;
+          const shifted = { ...rm };
+          if (wall === "south") shifted.y += absDist;
+          else if (wall === "north") shifted.y -= absDist;
+          else if (wall === "east") shifted.x += absDist;
+          else shifted.x -= absDist;
+          return shifted;
+        });
+        if (roomsToShift.size > 0) {
+          actions.push(`Shifted ${roomsToShift.size} neighbor(s) ${wall}ward`);
+        }
+      }
+
+      const verb = isExpanding ? "Expanded" : "Contracted";
+      actions.unshift(`${verb} ${r.name} ${wall} wall by ${absDist}cm`);
+
+      updatedRooms[roomIdx] = r;
+      updatedRooms = normalizeRoomCoordinates(updatedRooms);
+
+      const newTotalWidth = Math.max(...updatedRooms.map(rm => rm.x + rm.width));
+      const newTotalHeight = Math.max(...updatedRooms.map(rm => rm.y + rm.height));
+
+      const newPlan: FloorPlan = {
+        ...floorPlan,
+        rooms: updatedRooms,
+        doors: autoGenerateDoors(updatedRooms),
+        windows: autoGenerateWindows(updatedRooms),
+        totalWidth: newTotalWidth,
+        totalHeight: newTotalHeight,
+      };
+
+      const { plan: repairedPlan, repairs } = autoRepairFloorPlan(newPlan);
+      const newSqft = Math.round((r.width * r.height) / 929);
+
+      return {
+        result: JSON.stringify({
+          success: true,
+          new_sqft: newSqft,
+          room_dimensions: { width: r.width, height: r.height },
+          actions: [...actions, ...repairs],
+        }),
+        floorPlan: repairedPlan,
+        action: `${verb} ${room.name} ${wall} wall by ${absDist}cm → ~${newSqft} sqft`,
       };
     }
 
@@ -2614,11 +2769,45 @@ ${ROOM_TYPES.join(", ")}
 ═══ TOOLS ═══
 1. **generate_floor_plan** — PRIMARY TOOL. Just provide bedrooms, bathrooms, sqft. The engine builds everything.
 2. **add_room** / **remove_room** / **move_room** — Fine-tune individual rooms after generation.
-3. **resize_room** — Smart resize: provide room_id + target_sqft. The engine will expand toward free walls or shift neighbors. Doors/windows are auto-regenerated. Do NOT calculate coordinates yourself.
-4. **connect_rooms** — For adjacency/pairing requests. If rooms are not adjacent, it will move room_2 next to room_1 and shift neighbors to make space, then ensure a direct door. It can also slightly expand rooms to meet minimum dimensional requirements when flush-fitting.
-5. **add_door** / **add_window** — Add additional doors/windows if needed.
-6. **list_rooms** — Inspect current layout with IDs and positions.
-7. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
+3. **resize_room** — Smart resize by area: provide room_id + target_sqft. Use for area-based changes like "make the bedroom bigger".
+4. **reshape_room_boundary** — Directional wall manipulation: move a specific wall (north/south/east/west) by a precise distance in cm. Positive = expand outward, negative = contract. Nearby edges auto-snap flush within 20cm. Use when the user draws arrows or specifies a direction like "expand east by 2m".
+5. **connect_rooms** — For adjacency/pairing requests. If rooms are not adjacent, it will move room_2 next to room_1 and shift neighbors to make space, then ensure a direct door. It can also slightly expand rooms to meet minimum dimensional requirements when flush-fitting.
+6. **add_door** / **add_window** — Add additional doors/windows if needed.
+7. **list_rooms** — Inspect current layout with IDs and positions.
+8. **validate_floor_plan** — 🔍 INSPECTOR. Run after generating or modifying to check connectivity.
+
+═══ VISUAL ANNOTATIONS (RED PENCIL MARKINGS) ═══
+The user may draw RED pencil annotations directly on the floor plan canvas. These appear as red strokes overlaid on the screenshot image. When you see red markings in the canvas screenshot, you MUST interpret them to determine spatial intent:
+
+ARROW pointing outward from a wall → "Expand this wall in the arrow direction"
+  → Identify which room's wall the arrow originates from.
+  → Estimate the arrow's length relative to room dimensions visible in the image AND the coordinate data.
+  → Call reshape_room_boundary(room_id, wall, distance_cm).
+
+ARROW pointing inward toward a room → "Shrink/contract this wall"
+  → Call reshape_room_boundary with a negative distance_cm.
+
+SCRIBBLE or ZIGZAG over a room → "Delete this room"
+  → Identify the room underneath the scribble.
+  → Call remove_room(room_id).
+
+RECTANGLE drawn in empty space → "Add a room here"
+  → Estimate the rectangle's position and size relative to the existing layout.
+  → Call add_room with appropriate coordinates and dimensions.
+
+LINE drawn along a wall → "Add a window or door here"
+  → If on an exterior wall → add_window.
+  → If on a shared interior wall → add_door.
+
+CIRCLE or MARK on a specific feature → Contextual intent
+  → Combine with the user's text message to determine what to do.
+
+IMPORTANT RULES FOR VISUAL INTERPRETATION:
+1. ALWAYS combine visual markings with the user's text message. Text provides context for ambiguous drawings.
+2. If markings are unclear, describe what you see and ask for clarification rather than guessing.
+3. Use the COORDINATE DATA (room positions/dimensions) to calculate precise distances — do NOT rely on pixel estimation alone.
+4. When an arrow points from one room toward another room's wall, snap the expansion to meet that wall exactly using reshape_room_boundary.
+5. Red markings are ANNOTATIONS, not part of the actual floor plan. They are cleared after your response.
 
 ═══ SKETCH / IMAGE UPLOAD ═══
 When the user uploads a floor plan image, sketch, or blueprint:
@@ -2632,16 +2821,17 @@ When the user uploads a floor plan image, sketch, or blueprint:
 ═══ WORKFLOW ═══
 1. For text requests: Extract bedrooms/bathrooms/sqft → call **generate_floor_plan**.
 2. For image uploads: Call **generate_from_sketch** with explicit room coordinates.
-3. Review auto-inspection results.
-4. If issues exist, fix with connect_rooms, add_door, move_room, resize_room.
-5. Call **validate_floor_plan** to confirm.
+3. If the user has drawn red annotations on the canvas, interpret them using the VISUAL ANNOTATIONS rules above. Prefer reshape_room_boundary for arrow-based directional edits.
+4. Review auto-inspection results.
+5. If issues exist, fix with connect_rooms, add_door, move_room, resize_room, or reshape_room_boundary.
+6. Call **validate_floor_plan** to confirm.
 
 ═══ RESPONSE RULES ═══
 1. ALWAYS call generate_floor_plan when the user asks to create a house. Extract bedrooms, bathrooms, sqft.
 2. Be conversational and brief (1-3 sentences after executing actions).
 3. When recreating a sketch, first describe what you see, then generate using generate_from_sketch.
 4. ALWAYS call validate_floor_plan after generate_floor_plan or generate_from_sketch.
-5. For post-generation adjustments ("make the master bedroom bigger"), use resize_room with target_sqft.
+5. For post-generation adjustments: use resize_room for area-based changes ("make the bedroom bigger") and reshape_room_boundary for directional changes ("expand the bedroom east" or when the user draws an arrow on a wall).
 6. For ANY relational movement ("move room A to room B", "connect room A with room B", "pair these rooms", "place the bathroom on the left of the bedroom"), ALWAYS use connect_rooms. Do NOT calculate absolute coordinates using move_room.
 7. NEVER claim a requested connection is infeasible without first trying connect_rooms and validation.`;
 }
@@ -2693,7 +2883,7 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { messages: userMessages, mode, roomState, floorPlan, roomName, canvasScreenshot, images: userImages, hasReferenceSketch } = body;
+    const { messages: userMessages, mode, roomState, floorPlan, roomName, canvasScreenshot, images: userImages, hasReferenceSketch, hasAnnotations } = body;
 
     if (!userMessages || !Array.isArray(userMessages) || userMessages.length === 0) {
       return new Response(JSON.stringify({ error: "No messages provided." }), {
@@ -2721,7 +2911,8 @@ serve(async (req) => {
 
     // Use Flash for text-only requests, Pro only when user uploads images (sketches)
     const hasUserImages = userImages && userImages.length > 0;
-    const model = hasUserImages ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash";
+    const hasVisualContent = hasUserImages || hasAnnotations;
+    const model = hasVisualContent ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash";
 
     // Build messages
     const aiMessages: Array<Record<string, unknown>> = [
@@ -2789,7 +2980,7 @@ serve(async (req) => {
               : "https://ai.gateway.lovable.dev/v1/chat/completions";
             const apiKey = useDirectGemini ? userApiKey : LOVABLE_API_KEY;
             const apiModel = useDirectGemini
-              ? (hasUserImages ? "gemini-2.5-pro" : "gemini-2.5-flash")
+              ? (hasVisualContent ? "gemini-2.5-pro" : "gemini-2.5-flash")
               : model;
 
             const response = await fetch(apiUrl, {
