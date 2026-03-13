@@ -458,6 +458,8 @@ function parseRoomRequirements(requestedRooms: (string | RoomRequestInput)[]): R
   });
 }
 
+const HALLWAY_WIDTH = 120; // cm
+
 // ─── Template-Based Zone+Spine Layout Engine ────────────────────────────────
 // Replaces BSP with a deterministic architectural template:
 // PRIVATE ZONE (back): Left Wing | Hallway Spine | Right Wing
