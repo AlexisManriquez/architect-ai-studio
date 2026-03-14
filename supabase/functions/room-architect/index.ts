@@ -3545,6 +3545,7 @@ IMPORTANT: You are receiving SYNTHESIZED INSTRUCTIONS from a Supervisor (or from
   - NEVER use on structural rooms (living room, garage, entry, hallway, kitchen, dining room)
 
 **bridge_gap(source_room_ids, target_room_ids, direction)** — STRETCHES rooms across empty space to meet another set of rooms. Use this instead of move_room when closing large white spaces between two groups of rooms.
+**add_wall_attachment(type, room_id, wall, position_percent)** — Adds a window, door, or entryway to a specific wall. Use when the user draws a mark on a wall and says "add window here" or "put a door here". The gesture provides the LOCATION (room + wall + position); the user's text provides the OBJECT TYPE. This tool NEVER modifies room geometry.
 **resize_room(room_id, target_sqft)** — Resize by square footage. NEVER use for wall pushing.
 **move_room(room_id, x, y)** — Move room to absolute coordinates. Do NOT use to expand.
 
