@@ -3286,6 +3286,105 @@ function processFloorPlanTool(
       };
     }
 
+    case "add_wall_attachment": {
+      const attachType = args.type as string;
+      const roomRef = args.room_id as string;
+      const wall = args.wall as "north" | "south" | "east" | "west";
+      const posPercent = args.position_percent as number;
+      const room = resolveRoomByRef(floorPlan.rooms, roomRef);
+      
+      if (!room) return { result: JSON.stringify({ success: false, reason: `Room not found: ${roomRef}` }), floorPlan };
+
+      const defaultWidth = attachType === "window" ? 100 : 90;
+      const attachWidth = (args.width as number) || defaultWidth;
+      const halfWidth = attachWidth / 2;
+
+      // Calculate exact coordinates from room geometry + position percent
+      let x: number, y: number;
+      let orientation: "horizontal" | "vertical";
+
+      if (wall === "north") {
+        x = room.x + (room.width * posPercent / 100) - halfWidth;
+        y = room.y;
+        orientation = "horizontal";
+      } else if (wall === "south") {
+        x = room.x + (room.width * posPercent / 100) - halfWidth;
+        y = room.y + room.height;
+        orientation = "horizontal";
+      } else if (wall === "west") {
+        x = room.x;
+        y = room.y + (room.height * posPercent / 100) - halfWidth;
+        orientation = "vertical";
+      } else { // east
+        x = room.x + room.width;
+        y = room.y + (room.height * posPercent / 100) - halfWidth;
+        orientation = "vertical";
+      }
+
+      // Clamp to wall boundaries
+      if (orientation === "horizontal") {
+        x = Math.max(room.x, Math.min(x, room.x + room.width - attachWidth));
+      } else {
+        y = Math.max(room.y, Math.min(y, room.y + room.height - attachWidth));
+      }
+
+      x = Math.round(x);
+      y = Math.round(y);
+
+      if (attachType === "window") {
+        const newWindow: FloorPlanWindow = {
+          id: generateId(),
+          roomId: room.id,
+          x,
+          y,
+          width: attachWidth,
+          orientation,
+          wall,
+        };
+        return {
+          result: JSON.stringify({ success: true, window_id: newWindow.id }),
+          floorPlan: { ...floorPlan, windows: [...floorPlan.windows, newWindow] },
+          action: `Added window on ${room.name}'s ${wall} wall at ${posPercent}%`,
+        };
+      } else {
+        // door or entryway
+        const isExterior = attachType === "entryway";
+        const newDoor: FloorPlanDoor = {
+          id: generateId(),
+          roomId1: room.id,
+          roomId2: isExterior ? "exterior" : "exterior", // Will be updated by auto-repair if shared wall exists
+          x,
+          y,
+          width: attachWidth,
+          orientation,
+          isOpening: attachType === "entryway",
+        };
+
+        // Check if there's an adjacent room on this wall — if so, connect to it
+        if (!isExterior) {
+          for (const otherRoom of floorPlan.rooms) {
+            if (otherRoom.id === room.id) continue;
+            const SNAP = 5;
+            let isAdjacent = false;
+            if (wall === "north" && Math.abs(otherRoom.y + otherRoom.height - room.y) < SNAP) isAdjacent = true;
+            if (wall === "south" && Math.abs(room.y + room.height - otherRoom.y) < SNAP) isAdjacent = true;
+            if (wall === "west" && Math.abs(otherRoom.x + otherRoom.width - room.x) < SNAP) isAdjacent = true;
+            if (wall === "east" && Math.abs(room.x + room.width - otherRoom.x) < SNAP) isAdjacent = true;
+            if (isAdjacent) {
+              newDoor.roomId2 = otherRoom.id;
+              break;
+            }
+          }
+        }
+
+        return {
+          result: JSON.stringify({ success: true, door_id: newDoor.id }),
+          floorPlan: { ...floorPlan, doors: [...floorPlan.doors, newDoor] },
+          action: `Added ${attachType} on ${room.name}'s ${wall} wall at ${posPercent}%`,
+        };
+      }
+    }
+
     default:
       return { result: JSON.stringify({ error: `Unknown tool: ${name}` }), floorPlan };
   }
