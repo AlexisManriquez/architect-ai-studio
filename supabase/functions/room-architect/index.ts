@@ -2679,16 +2679,13 @@ function processFloorPlanTool(
         return { result: JSON.stringify({ success: false, reason: `${room.name} already meets or overlaps ${targetRoom.name} on the ${wall} side. No gap to close.` }), floorPlan };
       }
 
-      // Reuse reshape_room_boundary logic: apply wall movement
-      const { blocked: blockedWalls } = detectBlockedWalls(room, floorPlan.rooms);
-      const isBlocked = blockedWalls[wall].length > 0;
       const absDist = distanceCm;
-
       const snapActions: string[] = [`Expanded ${room.name} ${wall} wall by ${absDist}cm to meet ${targetRoom.name}`];
-      let updatedRooms = [...floorPlan.rooms];
+      let updatedRooms = floorPlan.rooms.map(rm => ({ ...rm }));
       const roomIdx = updatedRooms.findIndex(r => r.id === room.id);
       let r = { ...updatedRooms[roomIdx] };
 
+      // Expand the room wall
       if (wall === "north") {
         r.y = r.y - absDist;
         r.height = r.height + absDist;
@@ -2700,25 +2697,42 @@ function processFloorPlanTool(
       } else {
         r.width = r.width + absDist;
       }
-
-      // If blocked, cascade-shift neighbors
-      if (isBlocked) {
-        const roomsToShift = collectCascadeShifts(blockedWalls[wall], wall, updatedRooms, room.id);
-        updatedRooms = updatedRooms.map(rm => {
-          if (!roomsToShift.has(rm.id)) return rm;
-          const shifted = { ...rm };
-          if (wall === "south") shifted.y += absDist;
-          else if (wall === "north") shifted.y -= absDist;
-          else if (wall === "east") shifted.x += absDist;
-          else shifted.x -= absDist;
-          return shifted;
-        });
-        if (roomsToShift.size > 0) {
-          snapActions.push(`Shifted ${roomsToShift.size} neighbor(s) to make space`);
-        }
-      }
-
       updatedRooms[roomIdx] = r;
+
+      // Overlap-based collision resolution: only shift rooms that ACTUALLY collide
+      // with the newly expanded room, not all rooms sharing an edge.
+      const resolveOverlaps = (rooms: typeof updatedRooms, expandedRoom: typeof r, direction: CardinalDirection, excludeId: string): number => {
+        let shifted = 0;
+        let changed = true;
+        const maxPasses = 10;
+        let pass = 0;
+        while (changed && pass < maxPasses) {
+          changed = false;
+          pass++;
+          for (let i = 0; i < rooms.length; i++) {
+            if (rooms[i].id === expandedRoom.id || rooms[i].id === excludeId) continue;
+            const other = rooms[i];
+            // Check for actual rectangle overlap (not just edge touching)
+            const overlapX = Math.max(0, Math.min(expandedRoom.x + expandedRoom.width, other.x + other.width) - Math.max(expandedRoom.x, other.x));
+            const overlapY = Math.max(0, Math.min(expandedRoom.y + expandedRoom.height, other.y + other.height) - Math.max(expandedRoom.y, other.y));
+            if (overlapX > 2 && overlapY > 2) {
+              // This room overlaps with the expanded room — push it in the expansion direction
+              if (direction === "south") rooms[i] = { ...other, y: expandedRoom.y + expandedRoom.height };
+              else if (direction === "north") rooms[i] = { ...other, y: expandedRoom.y - other.height };
+              else if (direction === "east") rooms[i] = { ...other, x: expandedRoom.x + expandedRoom.width };
+              else rooms[i] = { ...other, x: expandedRoom.x - other.width };
+              shifted++;
+              changed = true;
+            }
+          }
+        }
+        return shifted;
+      };
+
+      const shiftedCount = resolveOverlaps(updatedRooms, r, wall, targetRoom.id);
+      if (shiftedCount > 0) {
+        snapActions.push(`Shifted ${shiftedCount} overlapping room(s) to prevent collisions`);
+      }
       updatedRooms = normalizeRoomCoordinates(updatedRooms);
 
       const newTotalWidth = Math.max(...updatedRooms.map(rm => rm.x + rm.width));
@@ -2796,6 +2810,19 @@ function processFloorPlanTool(
       if (!roomA || !roomB) {
         return {
           result: JSON.stringify({ success: false, reason: `Could not find rooms "${roomRef1}" and/or "${roomRef2}"` }),
+          floorPlan,
+        };
+      }
+
+      // Safeguard: refuse to relocate structural rooms that anchor the layout.
+      // connect_rooms moves room_2. If room_2 is a structural anchor, suggest snap_rooms_together instead.
+      const STRUCTURAL_TYPES = new Set(["living-room", "garage", "entry", "hallway", "kitchen", "dining-room"]);
+      if (STRUCTURAL_TYPES.has(roomB.type)) {
+        return {
+          result: JSON.stringify({
+            success: false,
+            reason: `Cannot relocate "${roomB.name}" (${roomB.type}) — it is a structural room. Use snap_rooms_together to expand ${roomA.name} toward ${roomB.name} instead, or use snap_rooms_together to expand ${roomB.name} toward ${roomA.name}.`,
+          }),
           floorPlan,
         };
       }
@@ -3049,16 +3076,33 @@ ${commonContext}`;
   // MODIFIER_AGENT
   return `You are an expert residential floor plan modifier AI. Your ONLY job is to edit and modify an existing layout precisely based on explicit instructions.
 
-IMPORTANT: You are receiving SYNTHESIZED INSTRUCTIONS from a Supervisor. The Supervisor has already interpreted the user's messy text and visual drawings to give you the exact intent. Execute exactly what the Supervisor tells you.
+IMPORTANT: You are receiving SYNTHESIZED INSTRUCTIONS from a Supervisor (or from computed annotation analysis). Execute exactly what you are told.
 
-═══ TOOLS ═══
-- **snap_rooms_together(room_id, target_room_id)** — Expands a room's wall to meet another room to close a gap. USE THIS if instructed to expand one room to another.
-- **connect_rooms(room_1_id, room_2_id)** — Relocates/moves room_2 adjacent to room_1.
-- **reshape_room_boundary(room_id, wall, distance_cm)** — Moves a specific wall by an exact distance. USE THIS if instructed to push, pull, or drag a specific wall. Call it MULTIPLE TIMES sequentially if the Supervisor says multiple rooms need their walls moved. ONLY use this for wall moving!
-- **resize_room(room_id, target_sqft)** — Resizes a room randomly outward/inward based on square footage. NEVER use this if the user wants to drag or push a specific wall! 
-- **move_room** — Relocates to an absolute coordinate. Do NOT use this to expand a room.
+═══ TOOL SELECTION — CRITICAL ═══
 
-Execute the tool that best aligns with the Supervisor's instructions, then ALWAYS call validate_floor_plan. Be conversational and brief in your text response.
+**snap_rooms_together(room_id, target_room_id)** — EXPAND a room's wall to close the gap and meet another room. THE DEFAULT CHOICE for:
+  - "extend X to meet Y", "expand X toward Y", "grow X to Y"
+  - Any annotation arrow from one room toward another
+  - Closing gaps between rooms
+  This tool KEEPS all rooms in place and just grows one room. It is SAFE.
+
+**reshape_room_boundary(room_id, wall, distance_cm)** — Move a SPECIFIC wall by an exact distance. Use for:
+  - "push/pull/drag the north wall", "expand bedroom east by 2m"
+  - Annotation arrows on a specific wall
+  Call MULTIPLE TIMES sequentially if multiple rooms need walls moved.
+
+**connect_rooms(room_1_id, room_2_id)** — PHYSICALLY RELOCATES room_2 next to room_1. DANGEROUS — only use when:
+  - The user explicitly says "move room X next to room Y" or "place X beside Y"
+  - NEVER use for "extend", "expand", "grow", or "meet" — use snap_rooms_together instead
+  - NEVER use on structural rooms (living room, garage, entry, hallway, kitchen, dining room)
+
+**resize_room(room_id, target_sqft)** — Resize by square footage. NEVER use for wall pushing.
+**move_room(room_id, x, y)** — Move room to absolute coordinates. Do NOT use to expand.
+
+═══ RULES ═══
+1. If the instruction contains exact tool calls (from annotation analysis), execute them EXACTLY as specified.
+2. ALWAYS call validate_floor_plan after modifications.
+3. Be conversational and brief in your text response.
 ${commonContext}`;
 }
 
@@ -3090,7 +3134,7 @@ You must output ONLY raw JSON. Do not include markdown blocks.
 {
   "selected_agent": "CREATOR_AGENT" | "MODIFIER_AGENT",
   "reasoning": "Explain what the user wants based on the text and visual annotations.",
-  "synthesized_instruction": "A PERFECT, crystal clear instruction for the sub-agent. Examples: 'generate a 3 bed 2 bath 2000 sqft house', 'expand the garage to meet the master bedroom using snap_rooms_together(garage_id, master_bedroom_id)', 'move the north wall of bedroom-2 up by 150cm using reshape_room_boundary'."
+  "synthesized_instruction": "A PERFECT, crystal clear instruction for the sub-agent. For 'extend/expand/grow X to Y' ALWAYS use snap_rooms_together. NEVER use connect_rooms for extend/expand. Examples: 'generate a 3 bed 2 bath 2000 sqft house', 'expand the garage to meet the master bedroom using snap_rooms_together(garage_id, master_bedroom_id)', 'extend the hallway to meet the living room using snap_rooms_together(hallway_id, living_room_id)', 'move the north wall of bedroom-2 up by 150cm using reshape_room_boundary'."
 }
 
 Current Floor Plan Context:
