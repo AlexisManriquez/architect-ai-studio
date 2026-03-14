@@ -1442,24 +1442,24 @@ Do NOT use if the user just wants them side-by-side — use connect_rooms for th
     type: "function",
     function: {
       name: "bridge_gap",
-      description: "Extends the walls of source rooms across empty space to seamlessly touch target rooms. Use this when the user says 'close the gap', 'fill the space', or 'connect these walls' and there is a large white space separating two groups of rooms. This stretches the source rooms; it does NOT move them.",
+      description: "Extends multiple rooms across a gap to meet a target boundary. This tool stretches the rooms and moves any doors or windows located on the affected walls. Use this for 'extend these walls to here', 'close this gap', 'fill the space', or 'connect these walls'. This stretches the source rooms; it does NOT move them.",
       parameters: {
         type: "object",
         properties: {
           source_room_ids: { 
             type: "array", 
             items: { type: "string" }, 
-            description: "IDs or names of rooms to be extended (e.g. ['Master Bedroom', 'Hallway'])" 
+            description: "Names or IDs of rooms to stretch (e.g., ['Master Bedroom', 'Hallway'])." 
           },
           target_room_ids: { 
             type: "array", 
             items: { type: "string" }, 
-            description: "IDs or names of the rooms on the other side of the gap that act as the stopping boundary (e.g. ['Garage', 'Living Room'])" 
+            description: "Names or IDs of rooms that define the destination boundary." 
           },
           direction: { 
             type: "string", 
             enum: ["north", "south", "east", "west"],
-            description: "The direction the source rooms need to stretch to hit the target rooms."
+            description: "The direction to stretch the source rooms."
           }
         },
         required: ["source_room_ids", "target_room_ids", "direction"],
