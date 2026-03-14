@@ -15,6 +15,7 @@ export type AnnotationIntent =
   | { action: "move"; roomId: string; roomName: string; targetX: number; targetY: number }
   | { action: "remove"; roomId: string; roomName: string }
   | { action: "close_gap"; box: { minX: number; minY: number; maxX: number; maxY: number }; axis: "x" | "y" }
+  | { action: "place_at_anchor"; roomId: string; roomName: string; wall: Wall; positionPercent: number }
   | { action: "unknown" };
 
 export interface AnnotationAnalysis {
@@ -128,6 +129,10 @@ interface WallInfo {
   distance: number;
 }
 
+interface WallInfoWithPercent extends WallInfo {
+  positionPercent: number;
+}
+
 function nearestWall(px: number, py: number, room: FloorPlanRoom): WallInfo {
   const walls: WallInfo[] = [
     { wall: "north", distance: Math.abs(py - room.y) },
@@ -136,6 +141,19 @@ function nearestWall(px: number, py: number, room: FloorPlanRoom): WallInfo {
     { wall: "east", distance: Math.abs(px - (room.x + room.width)) },
   ];
   return walls.reduce((a, b) => a.distance < b.distance ? a : b);
+}
+
+/** Returns the nearest wall AND the position along it as a percentage (0–100) */
+function nearestWallWithPercent(px: number, py: number, room: FloorPlanRoom): WallInfoWithPercent {
+  const info = nearestWall(px, py, room);
+  let positionPercent: number;
+  if (info.wall === "north" || info.wall === "south") {
+    positionPercent = Math.round(((px - room.x) / room.width) * 100);
+  } else {
+    positionPercent = Math.round(((py - room.y) / room.height) * 100);
+  }
+  positionPercent = Math.max(0, Math.min(100, positionPercent));
+  return { ...info, positionPercent };
 }
 
 function isNearWall(px: number, py: number, room: FloorPlanRoom): boolean {
@@ -296,6 +314,37 @@ function resolveCircleIntent(
   return { action: "close_gap", box: { minX, minY, maxX, maxY }, axis };
 }
 
+// ─── Anchor Resolution (for wall-targeted gestures) ────────────────────────
+
+function resolveAnchorIntent(
+  points: { x: number; y: number }[],
+  rooms: FloorPlanRoom[]
+): AnnotationIntent {
+  // Get the center of the gesture's bounding box
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+
+  const room = findRoomContaining(cx, cy, rooms);
+  if (room && isNearWall(cx, cy, room)) {
+    const wallInfo = nearestWallWithPercent(cx, cy, room);
+    return {
+      action: "place_at_anchor",
+      roomId: room.id,
+      roomName: room.name,
+      wall: wallInfo.wall,
+      positionPercent: wallInfo.positionPercent,
+    };
+  }
+  return { action: "unknown" };
+}
+
 // ─── Main Analysis ──────────────────────────────────────────────────────────
 
 export function analyzeAnnotations(
@@ -321,8 +370,20 @@ export function analyzeAnnotations(
         case "circle":
           intent = resolveCircleIntent(points, rooms);
           break;
-        default:
-          intent = { action: "unknown" };
+        default: {
+          // For "unknown" stroke types, try to resolve as a wall anchor
+          const anchorIntent = resolveAnchorIntent(points, rooms);
+          intent = anchorIntent;
+          break;
+        }
+      }
+
+      // If arrow/circle/scribble resolved to "unknown", try anchor as fallback
+      if (intent.action === "unknown") {
+        const anchorFallback = resolveAnchorIntent(points, rooms);
+        if (anchorFallback.action === "place_at_anchor") {
+          intent = anchorFallback;
+        }
       }
 
       return { type, startPoint, endPoint, intent };
@@ -347,6 +408,8 @@ export function buildAnnotationSignal(analyses: AnnotationAnalysis[]): string {
         return `${n}. Scribble/X over ${a.intent.roomName} [id:${a.intent.roomId}] → remove_room(room_id="${a.intent.roomId}")`;
       case "close_gap":
         return `${n}. Circle over region (${Math.round(a.intent.box.minX)},${Math.round(a.intent.box.minY)})-(${Math.round(a.intent.box.maxX)},${Math.round(a.intent.box.maxY)}) → close_gap(minX=${Math.round(a.intent.box.minX)}, minY=${Math.round(a.intent.box.minY)}, maxX=${Math.round(a.intent.box.maxX)}, maxY=${Math.round(a.intent.box.maxY)}, axis="${a.intent.axis}")`;
+      case "place_at_anchor":
+        return `${n}. Gesture on ${a.intent.roomName} [id:${a.intent.roomId}] ${a.intent.wall} wall at ${a.intent.positionPercent}% → add_wall_attachment(room_id="${a.intent.roomId}", wall="${a.intent.wall}", position_percent=${a.intent.positionPercent}). The user's text specifies WHAT to place (window, door, or entryway).`;
       case "unknown":
         return `${n}. Unrecognized gesture — stroke shape was ambiguous (not clearly an arrow or scribble). Ask the user to redraw this annotation more clearly, or describe what they want in text.`;
     }
@@ -375,6 +438,8 @@ export function buildSynthesizedInstruction(analyses: AnnotationAnalysis[], user
         return `${n}. Call remove_room with room_id="${a.intent.roomId}" (${a.intent.roomName})`;
       case "close_gap":
         return `${n}. Call close_gap with minX=${Math.round(a.intent.box.minX)}, minY=${Math.round(a.intent.box.minY)}, maxX=${Math.round(a.intent.box.maxX)}, maxY=${Math.round(a.intent.box.maxY)}, axis="${a.intent.axis}"`;
+      case "place_at_anchor":
+        return `${n}. Call add_wall_attachment with room_id="${a.intent.roomId}" (${a.intent.roomName}), wall="${a.intent.wall}", position_percent=${a.intent.positionPercent}. Determine "type" (window, door, or entryway) from the user's text.`;
       default:
         return "";
     }

@@ -1467,9 +1467,31 @@ Do NOT use if the user just wants them side-by-side — use connect_rooms for th
       },
     },
   },
-];
+  {
+    type: "function",
+    function: {
+      name: "add_wall_attachment",
+      description: `Adds a window, door, or entryway to a specific wall at a specific position. Use this when:
+- The user draws a mark on a wall and says "add window here", "put a door here", "add an entryway"
+- Annotation data provides a place_at_anchor intent with room_id, wall, and position_percent
+- The user describes wanting a window/door/opening on a specific wall
 
-// ─── Furniture Tools ────────────────────────────────────────────────────────
+The tool calculates exact coordinates from the room geometry and position_percent. It does NOT modify room dimensions — only adds to the doors or windows array.`,
+      parameters: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["window", "door", "entryway"], description: "What to place: window, door (interior), or entryway (exterior door/opening)" },
+          room_id: { type: "string", description: "ID or name of the room" },
+          wall: { type: "string", enum: ["north", "south", "east", "west"], description: "Which wall to place the attachment on" },
+          position_percent: { type: "number", description: "Position along the wall as a percentage (0=start, 50=center, 100=end). For north/south walls: 0=left, 100=right. For east/west walls: 0=top, 100=bottom." },
+          width: { type: "number", description: "Optional width in cm. Default: 100 for windows, 90 for doors/entryways." },
+        },
+        required: ["type", "room_id", "wall", "position_percent"],
+        additionalProperties: false,
+      },
+    },
+  },
+];
 const furnitureTools = [
   {
     type: "function",
@@ -3264,6 +3286,105 @@ function processFloorPlanTool(
       };
     }
 
+    case "add_wall_attachment": {
+      const attachType = args.type as string;
+      const roomRef = args.room_id as string;
+      const wall = args.wall as "north" | "south" | "east" | "west";
+      const posPercent = args.position_percent as number;
+      const room = resolveRoomByRef(floorPlan.rooms, roomRef);
+      
+      if (!room) return { result: JSON.stringify({ success: false, reason: `Room not found: ${roomRef}` }), floorPlan };
+
+      const defaultWidth = attachType === "window" ? 100 : 90;
+      const attachWidth = (args.width as number) || defaultWidth;
+      const halfWidth = attachWidth / 2;
+
+      // Calculate exact coordinates from room geometry + position percent
+      let x: number, y: number;
+      let orientation: "horizontal" | "vertical";
+
+      if (wall === "north") {
+        x = room.x + (room.width * posPercent / 100) - halfWidth;
+        y = room.y;
+        orientation = "horizontal";
+      } else if (wall === "south") {
+        x = room.x + (room.width * posPercent / 100) - halfWidth;
+        y = room.y + room.height;
+        orientation = "horizontal";
+      } else if (wall === "west") {
+        x = room.x;
+        y = room.y + (room.height * posPercent / 100) - halfWidth;
+        orientation = "vertical";
+      } else { // east
+        x = room.x + room.width;
+        y = room.y + (room.height * posPercent / 100) - halfWidth;
+        orientation = "vertical";
+      }
+
+      // Clamp to wall boundaries
+      if (orientation === "horizontal") {
+        x = Math.max(room.x, Math.min(x, room.x + room.width - attachWidth));
+      } else {
+        y = Math.max(room.y, Math.min(y, room.y + room.height - attachWidth));
+      }
+
+      x = Math.round(x);
+      y = Math.round(y);
+
+      if (attachType === "window") {
+        const newWindow: FloorPlanWindow = {
+          id: generateId(),
+          roomId: room.id,
+          x,
+          y,
+          width: attachWidth,
+          orientation,
+          wall,
+        };
+        return {
+          result: JSON.stringify({ success: true, window_id: newWindow.id }),
+          floorPlan: { ...floorPlan, windows: [...floorPlan.windows, newWindow] },
+          action: `Added window on ${room.name}'s ${wall} wall at ${posPercent}%`,
+        };
+      } else {
+        // door or entryway
+        const isExterior = attachType === "entryway";
+        const newDoor: FloorPlanDoor = {
+          id: generateId(),
+          roomId1: room.id,
+          roomId2: isExterior ? "exterior" : "exterior", // Will be updated by auto-repair if shared wall exists
+          x,
+          y,
+          width: attachWidth,
+          orientation,
+          isOpening: attachType === "entryway",
+        };
+
+        // Check if there's an adjacent room on this wall — if so, connect to it
+        if (!isExterior) {
+          for (const otherRoom of floorPlan.rooms) {
+            if (otherRoom.id === room.id) continue;
+            const SNAP = 5;
+            let isAdjacent = false;
+            if (wall === "north" && Math.abs(otherRoom.y + otherRoom.height - room.y) < SNAP) isAdjacent = true;
+            if (wall === "south" && Math.abs(room.y + room.height - otherRoom.y) < SNAP) isAdjacent = true;
+            if (wall === "west" && Math.abs(otherRoom.x + otherRoom.width - room.x) < SNAP) isAdjacent = true;
+            if (wall === "east" && Math.abs(room.x + room.width - otherRoom.x) < SNAP) isAdjacent = true;
+            if (isAdjacent) {
+              newDoor.roomId2 = otherRoom.id;
+              break;
+            }
+          }
+        }
+
+        return {
+          result: JSON.stringify({ success: true, door_id: newDoor.id }),
+          floorPlan: { ...floorPlan, doors: [...floorPlan.doors, newDoor] },
+          action: `Added ${attachType} on ${room.name}'s ${wall} wall at ${posPercent}%`,
+        };
+      }
+    }
+
     default:
       return { result: JSON.stringify({ error: `Unknown tool: ${name}` }), floorPlan };
   }
@@ -3424,6 +3545,7 @@ IMPORTANT: You are receiving SYNTHESIZED INSTRUCTIONS from a Supervisor (or from
   - NEVER use on structural rooms (living room, garage, entry, hallway, kitchen, dining room)
 
 **bridge_gap(source_room_ids, target_room_ids, direction)** — STRETCHES rooms across empty space to meet another set of rooms. Use this instead of move_room when closing large white spaces between two groups of rooms.
+**add_wall_attachment(type, room_id, wall, position_percent)** — Adds a window, door, or entryway to a specific wall. Use when the user draws a mark on a wall and says "add window here" or "put a door here". The gesture provides the LOCATION (room + wall + position); the user's text provides the OBJECT TYPE. This tool NEVER modifies room geometry.
 **resize_room(room_id, target_sqft)** — Resize by square footage. NEVER use for wall pushing.
 **move_room(room_id, x, y)** — Move room to absolute coordinates. Do NOT use to expand.
 
@@ -3462,6 +3584,7 @@ Use these rules ONLY if no structured annotation data is present:
 - Red circle or loop drawn overlapping two rooms → snap_rooms_together(A, B)
 - Red arrow on a specific wall → reshape_room_boundary for that room/wall
 - Scribble/X over a room → remove_room
+- Mark on a wall (circle, line, dot) + text mentioning window/door/opening → add_wall_attachment
 - Unclear or ambiguous mark → set "actions": [] and in synthesized_instruction tell the user you couldn't identify the gesture and ask them to redraw it more clearly (straight arrow to expand, X to delete, circle around two rooms to connect) or describe in text
 
 ═══ OUTPUT FORMAT ═══
@@ -3489,8 +3612,10 @@ ACTIONS RULES:
     remove_room           → { room_id }
     resize_room           → { room_id, target_sqft: number }
     bridge_gap            → { source_room_ids: string[], target_room_ids: string[], direction: "north"|"south"|"east"|"west" }
+    add_wall_attachment   → { type: "window"|"door"|"entryway", room_id, wall: "north"|"south"|"east"|"west", position_percent: number }
     generate_floor_plan   → (only for CREATOR tasks — no room IDs needed)
 - For "close the gap", "fill the space", or "connect these walls" across a large white gap → ALWAYS use bridge_gap to extend the rooms. Do NOT use move_room.
+- For gestures on a wall + text mentioning "window", "door", "opening", "entryway" → use add_wall_attachment. The annotation provides room_id, wall, position_percent; the text provides the type.
 - For "extend/expand/grow X to meet Y" → ALWAYS use snap_rooms_together, NEVER connect_rooms.
 - For "merge/combine/join/connect two rooms into one" → ALWAYS use merge_rooms, NOT snap_rooms_together.
 - If the task is ambiguous or you can't determine exact IDs, set "actions": [] and rely on synthesized_instruction.
