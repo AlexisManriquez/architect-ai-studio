@@ -2695,46 +2695,44 @@ function processFloorPlanTool(
       if (!targetRoom) return { result: JSON.stringify({ success: false, reason: `Target room not found for reference: ${targetRoomId}` }), floorPlan };
 
 
-      // Auto-detect the closest wall direction by comparing room centers
-      const roomCenterX = room.x + room.width / 2;
-      const roomCenterY = room.y + room.height / 2;
-      const targetCenterX = targetRoom.x + targetRoom.width / 2;
-      const targetCenterY = targetRoom.y + targetRoom.height / 2;
+      // Auto-detect the closest wall direction using Bounding Box edge gaps
+      const gaps = {
+        north: room.y - (targetRoom.y + targetRoom.height), // Target is above room
+        south: targetRoom.y - (room.y + room.height),       // Target is below room
+        west: room.x - (targetRoom.x + targetRoom.width),   // Target is left of room
+        east: targetRoom.x - (room.x + room.width)          // Target is right of room
+      };
 
-      const dx = targetCenterX - roomCenterX;
-      const dy = targetCenterY - roomCenterY;
+      let wall: CardinalDirection = "north";
+      let distanceCm = Infinity;
 
-      let wall: CardinalDirection;
-      let distanceCm: number;
+      // Find the direction with the smallest positive gap (the closest facing walls)
+      for (const [dir, gap] of Object.entries(gaps)) {
+        const isVerticalGap = dir === "north" || dir === "south";
+        const alignsHorizontally = Math.max(room.x, targetRoom.x) < Math.min(room.x + room.width, targetRoom.x + targetRoom.width);
+        const alignsVertically = Math.max(room.y, targetRoom.y) < Math.min(room.y + room.height, targetRoom.y + targetRoom.height);
 
-      if (Math.abs(dy) >= Math.abs(dx)) {
-        // Vertical relationship dominates
-        if (dy < 0) {
-          // Target is above (smaller Y = north in screen coords)
-          wall = "north";
-          // Distance = gap between room's north wall and target's south edge
-          distanceCm = Math.round(room.y - (targetRoom.y + targetRoom.height));
-        } else {
-          // Target is below
-          wall = "south";
-          distanceCm = Math.round(targetRoom.y - (room.y + room.height));
-        }
-      } else {
-        // Horizontal relationship dominates
-        if (dx < 0) {
-          // Target is to the left (west)
-          wall = "west";
-          distanceCm = Math.round(room.x - (targetRoom.x + targetRoom.width));
-        } else {
-          // Target is to the right (east)
-          wall = "east";
-          distanceCm = Math.round(targetRoom.x - (room.x + room.width));
+        if ((isVerticalGap ? alignsHorizontally : alignsVertically) && gap >= -5 && gap < distanceCm) {
+          distanceCm = gap;
+          wall = dir as CardinalDirection;
         }
       }
 
-      if (distanceCm <= 0) {
-        return { result: JSON.stringify({ success: false, reason: `${room.name} already meets or overlaps ${targetRoom.name} on the ${wall} side. No gap to close.` }), floorPlan };
+      // Fallback if they don't cleanly align on an axis: take the absolute closest edge
+      if (distanceCm === Infinity) {
+        for (const [dir, gap] of Object.entries(gaps)) {
+          if (gap >= -5 && gap < distanceCm) {
+            distanceCm = gap;
+            wall = dir as CardinalDirection;
+          }
+        }
       }
+
+      if (distanceCm <= 0 || distanceCm === Infinity) {
+        return { result: JSON.stringify({ success: false, reason: `${room.name} already meets or overlaps ${targetRoom.name}. No gap to close.` }), floorPlan };
+      }
+
+      distanceCm = Math.round(distanceCm);
 
       const absDist = distanceCm;
       const snapActions: string[] = [`Expanded ${room.name} ${wall} wall by ${absDist}cm to meet ${targetRoom.name}`];

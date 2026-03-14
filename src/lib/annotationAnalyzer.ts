@@ -170,13 +170,17 @@ function resolveArrowIntent(
 
   // CASE 2: Arrow starts at a room, ends in empty space
   if (startRoom && !endRoom) {
-    if (isNearWall(startPt.x, startPt.y, startRoom)) {
+    const arrowLen = dist(startPt, endPt);
+    const roomMaxDim = Math.max(startRoom.width, startRoom.height);
+
+    // If the arrow is longer than 1.5x the room's largest dimension, it must be a MOVE.
+    // A reshape gesture is always short relative to the room being reshaped.
+    if (isNearWall(startPt.x, startPt.y, startRoom) && arrowLen < roomMaxDim * 1.5) {
       // Reshape: expand or contract the wall
       const wallInfo = nearestWall(startPt.x, startPt.y, startRoom);
       const normal = WALL_NORMALS[wallInfo.wall];
       const arrowDx = endPt.x - startPt.x;
       const arrowDy = endPt.y - startPt.y;
-      const arrowLen = dist(startPt, endPt);
 
       // Dot product of arrow direction and wall normal
       const dot = (arrowDx * normal.dx + arrowDy * normal.dy) / (arrowLen || 1);
@@ -219,12 +223,13 @@ function resolveArrowIntent(
 
   // CASE 4: Arrow within same room, starting at a wall → reshape
   if (startRoom && endRoom && startRoom.id === endRoom.id) {
-    if (isNearWall(startPt.x, startPt.y, startRoom)) {
+    const arrowLen = dist(startPt, endPt);
+    const roomMaxDim = Math.max(startRoom.width, startRoom.height);
+    if (isNearWall(startPt.x, startPt.y, startRoom) && arrowLen < roomMaxDim * 1.5) {
       const wallInfo = nearestWall(startPt.x, startPt.y, startRoom);
       const normal = WALL_NORMALS[wallInfo.wall];
       const arrowDx = endPt.x - startPt.x;
       const arrowDy = endPt.y - startPt.y;
-      const arrowLen = dist(startPt, endPt);
       const dot = (arrowDx * normal.dx + arrowDy * normal.dy) / (arrowLen || 1);
       if (Math.abs(dot) < 0.3) return { action: "unknown" };
       const projectedDistance = Math.round(arrowLen * dot);
