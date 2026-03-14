@@ -129,6 +129,10 @@ interface WallInfo {
   distance: number;
 }
 
+interface WallInfoWithPercent extends WallInfo {
+  positionPercent: number;
+}
+
 function nearestWall(px: number, py: number, room: FloorPlanRoom): WallInfo {
   const walls: WallInfo[] = [
     { wall: "north", distance: Math.abs(py - room.y) },
@@ -137,6 +141,19 @@ function nearestWall(px: number, py: number, room: FloorPlanRoom): WallInfo {
     { wall: "east", distance: Math.abs(px - (room.x + room.width)) },
   ];
   return walls.reduce((a, b) => a.distance < b.distance ? a : b);
+}
+
+/** Returns the nearest wall AND the position along it as a percentage (0–100) */
+function nearestWallWithPercent(px: number, py: number, room: FloorPlanRoom): WallInfoWithPercent {
+  const info = nearestWall(px, py, room);
+  let positionPercent: number;
+  if (info.wall === "north" || info.wall === "south") {
+    positionPercent = Math.round(((px - room.x) / room.width) * 100);
+  } else {
+    positionPercent = Math.round(((py - room.y) / room.height) * 100);
+  }
+  positionPercent = Math.max(0, Math.min(100, positionPercent));
+  return { ...info, positionPercent };
 }
 
 function isNearWall(px: number, py: number, room: FloorPlanRoom): boolean {
