@@ -1442,24 +1442,24 @@ Do NOT use if the user just wants them side-by-side — use connect_rooms for th
     type: "function",
     function: {
       name: "bridge_gap",
-      description: "Extends the walls of source rooms across empty space to seamlessly touch target rooms. Use this when the user says 'close the gap', 'fill the space', or 'connect these walls' and there is a large white space separating two groups of rooms. This stretches the source rooms; it does NOT move them.",
+      description: "Extends multiple rooms across a gap to meet a target boundary. This tool stretches the rooms and moves any doors or windows located on the affected walls. Use this for 'extend these walls to here', 'close this gap', 'fill the space', or 'connect these walls'. This stretches the source rooms; it does NOT move them.",
       parameters: {
         type: "object",
         properties: {
           source_room_ids: { 
             type: "array", 
             items: { type: "string" }, 
-            description: "IDs or names of rooms to be extended (e.g. ['Master Bedroom', 'Hallway'])" 
+            description: "Names or IDs of rooms to stretch (e.g., ['Master Bedroom', 'Hallway'])." 
           },
           target_room_ids: { 
             type: "array", 
             items: { type: "string" }, 
-            description: "IDs or names of the rooms on the other side of the gap that act as the stopping boundary (e.g. ['Garage', 'Living Room'])" 
+            description: "Names or IDs of rooms that define the destination boundary." 
           },
           direction: { 
             type: "string", 
             enum: ["north", "south", "east", "west"],
-            description: "The direction the source rooms need to stretch to hit the target rooms."
+            description: "The direction to stretch the source rooms."
           }
         },
         required: ["source_room_ids", "target_room_ids", "direction"],
@@ -3070,20 +3070,17 @@ function processFloorPlanTool(
       const sourceRefs = (args.source_room_ids as string[]) || [];
       const targetRefs = (args.target_room_ids as string[]) || [];
       const direction = args.direction as CardinalDirection;
-
-      if (!sourceRefs.length || !targetRefs.length || !direction) {
-        return { result: JSON.stringify({ success: false, reason: "Missing required arguments for bridge_gap" }), floorPlan };
-      }
+      const TOLERANCE = 5; // 5cm tolerance for wall snapping
 
       const sourceRooms = sourceRefs.map(ref => resolveRoomByRef(floorPlan.rooms, ref)).filter(Boolean) as FloorPlanRoom[];
       const targetRooms = targetRefs.map(ref => resolveRoomByRef(floorPlan.rooms, ref)).filter(Boolean) as FloorPlanRoom[];
 
       if (sourceRooms.length === 0 || targetRooms.length === 0) {
-        return { result: JSON.stringify({ success: false, reason: "Could not resolve source or target rooms" }), floorPlan };
+        return { result: JSON.stringify({ success: false, reason: "Could not find rooms." }), floorPlan };
       }
 
-      let targetBoundary = direction === "north" || direction === "west" ? -Infinity : Infinity;
-
+      // 1. Calculate the target boundary coordinate
+      let targetBoundary = (direction === "north" || direction === "west") ? -Infinity : Infinity;
       for (const tRoom of targetRooms) {
         if (direction === "south") targetBoundary = Math.min(targetBoundary, tRoom.y);
         else if (direction === "north") targetBoundary = Math.max(targetBoundary, tRoom.y + tRoom.height);
@@ -3092,65 +3089,82 @@ function processFloorPlanTool(
       }
 
       let updatedRooms = [...floorPlan.rooms];
+      let updatedDoors = [...floorPlan.doors];
+      let updatedWindows = [...floorPlan.windows];
       const sourceIds = new Set(sourceRooms.map(r => r.id));
-      let maxExtension = 0;
 
-      updatedRooms = updatedRooms.map(r => {
-        if (!sourceIds.has(r.id)) return r;
-        
-        const newRoom = { ...r };
-        let extension = 0;
-        
-        if (direction === "south") {
-          extension = targetBoundary - (newRoom.y + newRoom.height);
-          if (extension > 0) newRoom.height += extension;
-        } else if (direction === "north") {
-          extension = newRoom.y - targetBoundary;
-          if (extension > 0) {
-            newRoom.y -= extension;
-            newRoom.height += extension;
-          }
-        } else if (direction === "east") {
-          extension = targetBoundary - (newRoom.x + newRoom.width);
-          if (extension > 0) newRoom.width += extension;
-        } else if (direction === "west") {
-          extension = newRoom.x - targetBoundary;
-          if (extension > 0) {
-            newRoom.x -= extension;
-            newRoom.width += extension;
-          }
-        }
-        
-        maxExtension = Math.max(maxExtension, extension);
-        return newRoom;
-      });
+      // 2. Process each source room and its attachments
+      for (const sRoom of sourceRooms) {
+        const oldY = sRoom.y;
+        const oldX = sRoom.x;
+        const oldBottom = sRoom.y + sRoom.height;
+        const oldRight = sRoom.x + sRoom.width;
+        let delta = 0;
 
-      if (maxExtension <= 0) {
-        return { result: JSON.stringify({ success: false, reason: "Rooms are already touching or overlapping. No gap to bridge." }), floorPlan };
+        // Update Room Geometry
+        updatedRooms = updatedRooms.map(r => {
+          if (r.id !== sRoom.id) return r;
+          const nr = { ...r };
+          if (direction === "south") {
+            delta = targetBoundary - oldBottom;
+            nr.height += delta;
+          } else if (direction === "north") {
+            delta = oldY - targetBoundary;
+            nr.y = targetBoundary;
+            nr.height += delta;
+          } else if (direction === "east") {
+            delta = targetBoundary - oldRight;
+            nr.width += delta;
+          } else if (direction === "west") {
+            delta = oldX - targetBoundary;
+            nr.x = targetBoundary;
+            nr.width += delta;
+          }
+          return nr;
+        });
+
+        // 3. Move Windows on the affected wall
+        updatedWindows = updatedWindows.map(w => {
+          if (w.roomId !== sRoom.id || w.wall !== direction) return w;
+          const nw = { ...w };
+          if (direction === "south") nw.y = targetBoundary;
+          else if (direction === "north") nw.y = targetBoundary;
+          else if (direction === "east") nw.x = targetBoundary;
+          else if (direction === "west") nw.x = targetBoundary;
+          return nw;
+        });
+
+        // 4. Move Doors on the affected wall
+        updatedDoors = updatedDoors.map(d => {
+          const isAttached = d.roomId1 === sRoom.id || d.roomId2 === sRoom.id;
+          if (!isAttached) return d;
+
+          const nd = { ...d };
+          if (direction === "south" && Math.abs(d.y - oldBottom) < TOLERANCE) nd.y = targetBoundary;
+          else if (direction === "north" && Math.abs(d.y - oldY) < TOLERANCE) nd.y = targetBoundary;
+          else if (direction === "east" && Math.abs(d.x - oldRight) < TOLERANCE) nd.x = targetBoundary;
+          else if (direction === "west" && Math.abs(d.x - oldX) < TOLERANCE) nd.x = targetBoundary;
+          
+          return nd;
+        });
       }
-
-      const newTotalWidth = Math.max(...updatedRooms.map(rm => rm.x + rm.width));
-      const newTotalHeight = Math.max(...updatedRooms.map(rm => rm.y + rm.height));
 
       const bridgedPlan: FloorPlan = {
         ...floorPlan,
         rooms: updatedRooms,
-        doors: autoGenerateDoors(updatedRooms),
-        windows: autoGenerateWindows(updatedRooms),
-        totalWidth: newTotalWidth,
-        totalHeight: newTotalHeight,
+        doors: updatedDoors,
+        windows: updatedWindows,
+        totalWidth: Math.max(...updatedRooms.map(r => r.x + r.width)),
+        totalHeight: Math.max(...updatedRooms.map(r => r.y + r.height)),
       };
 
-      const { plan: repairedPlan, repairs } = autoRepairFloorPlan(bridgedPlan);
+      // Final auto-repair to ensure new shared walls get required doors
+      const { plan: finalPlan, repairs } = autoRepairFloorPlan(bridgedPlan);
 
       return {
-        result: JSON.stringify({ 
-          success: true, 
-          extended_cm: maxExtension,
-          actions: [`Bridged gap by extending ${maxExtension}cm ${direction}`, ...repairs] 
-        }),
-        floorPlan: repairedPlan,
-        action: `Extended ${sourceRooms.map(r=>r.name).join(", ")} ${direction} to meet ${targetRooms.map(r=>r.name).join(", ")}`,
+        result: JSON.stringify({ success: true, repairs }),
+        floorPlan: finalPlan,
+        action: `Bridged gap by stretching ${sourceRooms.map(r => r.name).join(", ")} ${direction} to meet ${targetRooms.map(r => r.name).join(", ")}.`
       };
     }
 
