@@ -1467,9 +1467,31 @@ Do NOT use if the user just wants them side-by-side — use connect_rooms for th
       },
     },
   },
-];
+  {
+    type: "function",
+    function: {
+      name: "add_wall_attachment",
+      description: `Adds a window, door, or entryway to a specific wall at a specific position. Use this when:
+- The user draws a mark on a wall and says "add window here", "put a door here", "add an entryway"
+- Annotation data provides a place_at_anchor intent with room_id, wall, and position_percent
+- The user describes wanting a window/door/opening on a specific wall
 
-// ─── Furniture Tools ────────────────────────────────────────────────────────
+The tool calculates exact coordinates from the room geometry and position_percent. It does NOT modify room dimensions — only adds to the doors or windows array.`,
+      parameters: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["window", "door", "entryway"], description: "What to place: window, door (interior), or entryway (exterior door/opening)" },
+          room_id: { type: "string", description: "ID or name of the room" },
+          wall: { type: "string", enum: ["north", "south", "east", "west"], description: "Which wall to place the attachment on" },
+          position_percent: { type: "number", description: "Position along the wall as a percentage (0=start, 50=center, 100=end). For north/south walls: 0=left, 100=right. For east/west walls: 0=top, 100=bottom." },
+          width: { type: "number", description: "Optional width in cm. Default: 100 for windows, 90 for doors/entryways." },
+        },
+        required: ["type", "room_id", "wall", "position_percent"],
+        additionalProperties: false,
+      },
+    },
+  },
+];
 const furnitureTools = [
   {
     type: "function",
