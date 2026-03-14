@@ -438,6 +438,8 @@ export function buildSynthesizedInstruction(analyses: AnnotationAnalysis[], user
         return `${n}. Call remove_room with room_id="${a.intent.roomId}" (${a.intent.roomName})`;
       case "close_gap":
         return `${n}. Call close_gap with minX=${Math.round(a.intent.box.minX)}, minY=${Math.round(a.intent.box.minY)}, maxX=${Math.round(a.intent.box.maxX)}, maxY=${Math.round(a.intent.box.maxY)}, axis="${a.intent.axis}"`;
+      case "place_at_anchor":
+        return `${n}. Call add_wall_attachment with room_id="${a.intent.roomId}" (${a.intent.roomName}), wall="${a.intent.wall}", position_percent=${a.intent.positionPercent}. Determine "type" (window, door, or entryway) from the user's text.`;
       default:
         return "";
     }
