@@ -314,6 +314,37 @@ function resolveCircleIntent(
   return { action: "close_gap", box: { minX, minY, maxX, maxY }, axis };
 }
 
+// ─── Anchor Resolution (for wall-targeted gestures) ────────────────────────
+
+function resolveAnchorIntent(
+  points: { x: number; y: number }[],
+  rooms: FloorPlanRoom[]
+): AnnotationIntent {
+  // Get the center of the gesture's bounding box
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+
+  const room = findRoomContaining(cx, cy, rooms);
+  if (room && isNearWall(cx, cy, room)) {
+    const wallInfo = nearestWallWithPercent(cx, cy, room);
+    return {
+      action: "place_at_anchor",
+      roomId: room.id,
+      roomName: room.name,
+      wall: wallInfo.wall,
+      positionPercent: wallInfo.positionPercent,
+    };
+  }
+  return { action: "unknown" };
+}
+
 // ─── Main Analysis ──────────────────────────────────────────────────────────
 
 export function analyzeAnnotations(
@@ -339,8 +370,20 @@ export function analyzeAnnotations(
         case "circle":
           intent = resolveCircleIntent(points, rooms);
           break;
-        default:
-          intent = { action: "unknown" };
+        default: {
+          // For "unknown" stroke types, try to resolve as a wall anchor
+          const anchorIntent = resolveAnchorIntent(points, rooms);
+          intent = anchorIntent;
+          break;
+        }
+      }
+
+      // If arrow/circle/scribble resolved to "unknown", try anchor as fallback
+      if (intent.action === "unknown") {
+        const anchorFallback = resolveAnchorIntent(points, rooms);
+        if (anchorFallback.action === "place_at_anchor") {
+          intent = anchorFallback;
+        }
       }
 
       return { type, startPoint, endPoint, intent };
