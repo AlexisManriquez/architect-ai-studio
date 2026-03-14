@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(grep -v \"^ui$\")",
-      "Bash(npx vite:*)"
+      "Bash(npx vite:*)",
+      "Bash(find 'c:/Users/Alexis Manriquez/Documents/LumiSpace_2.0' -type f \\\\\\(-name *.py -o -name *.mjs -o -name *.cjs -o -name *.js \\\\\\) -path */functions/*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

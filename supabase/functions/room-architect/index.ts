@@ -427,6 +427,12 @@ interface LayoutRect {
   x: number; y: number; width: number; height: number;
 }
 
+/** Wing placement preferences — arrays of room name/type keywords (lowercase) to force into each wing */
+interface WingPreferences {
+  leftWing?: string[];  // e.g. ["master-bedroom","master-bathroom"] → west side
+  rightWing?: string[]; // e.g. ["bedroom","bathroom"] → east side
+}
+
 // ─── Room Requirement Parser ────────────────────────────────────────────────
 interface RoomReq { name: string; type: string; weight: number; }
 
@@ -476,9 +482,19 @@ const PRIVATE_WING_TYPES = new Set(["bedroom", "bathroom", "closet", "office", "
  * Mathematically guarantees: no isolated rooms, no walk-through bathrooms,
  * garage on perimeter, kitchen adjacent to living area.
  */
+function matchesWingPref(room: RoomReq, keywords: string[]): boolean {
+  const nameLower = room.name.toLowerCase().replace(/\s+/g, "-");
+  const typeLower = room.type.toLowerCase();
+  return keywords.some(kw => {
+    const k = kw.toLowerCase();
+    return nameLower.includes(k) || typeLower.includes(k) || k.includes(typeLower);
+  });
+}
+
 function generateProceduralLayout(
   requestedRooms: (string | RoomRequestInput)[],
-  totalSqft: number
+  totalSqft: number,
+  wingPrefs?: WingPreferences
 ): FloorPlanRoom[] {
   const allReqs = parseRoomRequirements(requestedRooms);
 
@@ -533,49 +549,68 @@ function generateProceduralLayout(
 
   // ── 5. Distribute rooms into left and right wings ──
   // ARCHITECTURAL RULE: Master bedroom + master bathroom must be in the SAME wing (en-suite).
-  // Other bedrooms pair with remaining bathrooms when possible.
+  // Wing preferences (from user) override automatic balancing.
   const leftWing: RoomReq[] = [];
   const rightWing: RoomReq[] = [];
   let leftWeight = 0;
   // Kitchen/Dining always go to right wing (touching living area below)
   let rightWeight = kitchenDiningReqs.reduce((s, r) => s + r.weight, 0);
 
-  // Identify master suite (master bedroom + master bathroom)
-  const masterBedIdx = privateReqs.findIndex(r => r.name.toLowerCase().includes("master") && r.type === "bedroom");
-  const masterBathIdx = privateReqs.findIndex(r => r.name.toLowerCase().includes("master") && r.type === "bathroom");
-
-  // Build paired groups: master suite first, then remaining rooms
-  const pairedGroups: RoomReq[][] = [];
   const usedIndices = new Set<number>();
 
-  if (masterBedIdx >= 0 && masterBathIdx >= 0) {
-    pairedGroups.push([privateReqs[masterBedIdx], privateReqs[masterBathIdx]]);
-    usedIndices.add(masterBedIdx);
-    usedIndices.add(masterBathIdx);
-  }
-
-  // Remaining rooms as individual entries
-  const remainingPrivate = privateReqs.filter((_, i) => !usedIndices.has(i));
-
-  // Place master suite first (as a group — both go to the same wing)
-  for (const group of pairedGroups) {
-    const groupWeight = group.reduce((s, r) => s + r.weight, 0);
-    if (leftWeight <= rightWeight) {
-      for (const room of group) leftWing.unshift(room);
-      leftWeight += groupWeight;
-    } else {
-      for (const room of group) rightWing.unshift(room);
-      rightWeight += groupWeight;
+  // ── 5a. Apply explicit wing preferences first ──
+  if (wingPrefs?.leftWing?.length || wingPrefs?.rightWing?.length) {
+    // Force rooms matching left preference to left wing
+    privateReqs.forEach((room, i) => {
+      if (wingPrefs.leftWing && matchesWingPref(room, wingPrefs.leftWing)) {
+        leftWing.push(room);
+        leftWeight += room.weight;
+        usedIndices.add(i);
+      } else if (wingPrefs.rightWing && matchesWingPref(room, wingPrefs.rightWing)) {
+        rightWing.push(room);
+        rightWeight += room.weight;
+        usedIndices.add(i);
+      }
+    });
+    // If master bedroom was placed, ensure master bathroom follows to same wing
+    const masterBedInLeft = leftWing.some(r => r.name.toLowerCase().includes("master") && r.type === "bedroom");
+    const masterBedInRight = rightWing.some(r => r.name.toLowerCase().includes("master") && r.type === "bedroom");
+    privateReqs.forEach((room, i) => {
+      if (usedIndices.has(i)) return;
+      const isMasterBath = room.name.toLowerCase().includes("master") && room.type === "bathroom";
+      if (isMasterBath && masterBedInLeft) {
+        leftWing.push(room); leftWeight += room.weight; usedIndices.add(i);
+      } else if (isMasterBath && masterBedInRight) {
+        rightWing.push(room); rightWeight += room.weight; usedIndices.add(i);
+      }
+    });
+  } else {
+    // No preferences — use default: master suite to left wing
+    const masterBedIdx = privateReqs.findIndex(r => r.name.toLowerCase().includes("master") && r.type === "bedroom");
+    const masterBathIdx = privateReqs.findIndex(r => r.name.toLowerCase().includes("master") && r.type === "bathroom");
+    if (masterBedIdx >= 0 && masterBathIdx >= 0) {
+      const group = [privateReqs[masterBedIdx], privateReqs[masterBathIdx]];
+      const groupWeight = group.reduce((s, r) => s + r.weight, 0);
+      if (leftWeight <= rightWeight) {
+        for (const room of group) leftWing.unshift(room);
+        leftWeight += groupWeight;
+      } else {
+        for (const room of group) rightWing.unshift(room);
+        rightWeight += groupWeight;
+      }
+      usedIndices.add(masterBedIdx);
+      usedIndices.add(masterBathIdx);
     }
   }
 
   // Balance remaining private rooms between wings
+  const remainingPrivate = privateReqs.filter((_, i) => !usedIndices.has(i));
   for (const room of remainingPrivate) {
     if (leftWeight <= rightWeight) {
-      leftWing.unshift(room);
+      leftWing.push(room);
       leftWeight += room.weight;
     } else {
-      rightWing.unshift(room);
+      rightWing.push(room);
       rightWeight += room.weight;
     }
   }
@@ -611,8 +646,6 @@ function generateProceduralLayout(
       });
       currentY += Math.max(roomHeight, minDims.minH);
     }
-    // Adjust private zone height if rooms overflowed due to minimums
-    // (handled by bounding box recalculation later)
   }
 
   // Pack right wing
@@ -635,6 +668,29 @@ function generateProceduralLayout(
         height: Math.max(roomHeight, minDims.minH),
       });
       currentY += Math.max(roomHeight, minDims.minH);
+    }
+  }
+
+  // ── Fix gap: both wings must reach the same bottom edge ──
+  // When rooms overflow privateZoneHeight due to minDims, the wings may have unequal heights,
+  // leaving an empty region below the shorter wing. Stretch the last room of each wing to match.
+  {
+    const leftRooms = allRooms.filter(r => r.x === 0 && r.type !== "hallway" && r.type !== "garage");
+    const rightRooms = allRooms.filter(r => r.x === rightWingX && r.type !== "garage");
+    const leftBottom = leftRooms.length > 0 ? Math.max(...leftRooms.map(r => r.y + r.height)) : 0;
+    const rightBottom = rightRooms.length > 0 ? Math.max(...rightRooms.map(r => r.y + r.height)) : 0;
+    const hallwayRoom = allRooms.find(r => r.type === "hallway");
+    const wingBottom = Math.max(leftBottom, rightBottom);
+    if (leftBottom < wingBottom && leftRooms.length > 0) {
+      const lastLeft = leftRooms.reduce((a, b) => (a.y + a.height >= b.y + b.height ? a : b));
+      lastLeft.height += wingBottom - leftBottom;
+    }
+    if (rightBottom < wingBottom && rightRooms.length > 0) {
+      const lastRight = rightRooms.reduce((a, b) => (a.y + a.height >= b.y + b.height ? a : b));
+      lastRight.height += wingBottom - rightBottom;
+    }
+    if (hallwayRoom && hallwayRoom.height < wingBottom) {
+      hallwayRoom.height = wingBottom;
     }
   }
 
@@ -1070,6 +1126,23 @@ The engine builds the room list automatically from these parameters. You can opt
               },
               required: ["type"],
             },
+          },
+          wing_preferences: {
+            type: "object",
+            description: "Override which wing (west/left vs east/right) specific rooms are placed in. Use when the user specifies directional placement like 'master bedroom on the west side', 'bedrooms and bathrooms on the east wing', etc. Keywords are matched against room names and types (case-insensitive).",
+            properties: {
+              left_wing: {
+                type: "array",
+                items: { type: "string" },
+                description: "Room name/type keywords to force onto the LEFT (WEST) wing. E.g. ['master-bedroom','master-bathroom'] or ['bedroom','bathroom'].",
+              },
+              right_wing: {
+                type: "array",
+                items: { type: "string" },
+                description: "Room name/type keywords to force onto the RIGHT (EAST) wing. E.g. ['bedroom','bathroom'].",
+              },
+            },
+            additionalProperties: false,
           },
         },
         required: ["name"],
@@ -2031,6 +2104,10 @@ function processFloorPlanTool(
       const includeOffice = (args.include_office as boolean) ?? false;
       const includeLaundry = (args.include_laundry as boolean) ?? false;
       const extraRooms = (args.extra_rooms as RoomRequestInput[]) || [];
+      const wingPrefsRaw = args.wing_preferences as { left_wing?: string[]; right_wing?: string[] } | undefined;
+      const wingPrefs: WingPreferences | undefined = wingPrefsRaw
+        ? { leftWing: wingPrefsRaw.left_wing, rightWing: wingPrefsRaw.right_wing }
+        : undefined;
 
       // Build room list from parameters
       const requestedRooms: RoomRequestInput[] = [];
@@ -2081,7 +2158,7 @@ function processFloorPlanTool(
       console.log(`generate_floor_plan: ${bedrooms} bed, ${bathroomsRaw} bath, ${targetSqft} sqft, garage=${includeGarage}, rooms=${requestedRooms.length}`);
 
       // Use the template-based layout engine
-      const rooms = generateProceduralLayout(requestedRooms, targetSqft);
+      const rooms = generateProceduralLayout(requestedRooms, targetSqft, wingPrefs);
       
       const totalWidth = Math.max(...rooms.map(r => r.x + r.width));
       const totalHeight = Math.max(...rooms.map(r => r.y + r.height));
@@ -2943,8 +3020,9 @@ ${ROOM_TYPES.join(", ")}
     return `You are an expert residential floor plan creator AI. Your ONLY job is to create new floor plans (from text or sketch images).
 
 YOU DO NOT NEED TO CALCULATE COORDINATES OR BUILD ROOM LISTS. The template-based layout engine handles everything. Your job is to:
-1. Extract bedrooms, bathrooms, and target sqft explicitly from the user's instructions.
-2. Call generate_floor_plan with those values.
+1. Extract bedrooms, bathrooms, and target sqft from the user's instructions.
+2. Extract any SPATIAL/DIRECTIONAL preferences for room placement.
+3. Call generate_floor_plan with those values.
 
 ═══ DEFAULT VALUES ═══
 - Bedrooms: 3
@@ -2952,6 +3030,16 @@ YOU DO NOT NEED TO CALCULATE COORDINATES OR BUILD ROOM LISTS. The template-based
 - Square footage: 2000
 - Garage: included
 - Office/Laundry: not included (unless asked)
+
+═══ WING PLACEMENT (WEST/EAST) ═══
+The floor plan has a LEFT (WEST) wing and a RIGHT (EAST) wing separated by a central hallway.
+When the user specifies where rooms should go, pass wing_preferences to generate_floor_plan:
+- "master bedroom and bathroom on the west wing" → wing_preferences: { left_wing: ["master-bedroom","master-bathroom"] }
+- "all bedrooms and bathrooms on the east wing" → wing_preferences: { right_wing: ["bedroom","bathroom"] }
+- "master suite on the west, other bedrooms on the east" → wing_preferences: { left_wing: ["master-bedroom","master-bathroom"], right_wing: ["bedroom","bathroom"] }
+- "west wing" = left_wing, "east wing" = right_wing, "left side" = left_wing, "right side" = right_wing
+
+If the user gives no directional preference, omit wing_preferences entirely (auto-balanced).
 
 If generating from a sketch, use generate_from_sketch and estimate fractions carefully.
 ALWAYS call validate_floor_plan after generating.
@@ -2984,12 +3072,18 @@ function buildSupervisorSystemPrompt(floorPlan: FloorPlan): string {
   return `You are the Supervisor Router for an AI Architectural Floor Plan App.
 Your ONLY job is to analyze the user's intent (and any RED PENCIL VISUAL ANNOTATIONS on the screenshot) and determine if this is a CREATOR task (generating a new house from scratch) or a MODIFIER task (editing an existing floor plan layout).
 
-═══ VISUAL ANNOTATIONS (RED PENCIL) ═══
+═══ STRUCTURED ANNOTATION DATA ═══
+If the user message contains [ANNOTATION ANALYSIS ...], those are PRECISE, PROGRAMMATICALLY COMPUTED instructions derived from coordinate geometry — NOT visual guesswork.
+TRUST THEM OVER YOUR OWN VISUAL INTERPRETATION. Copy the exact tool calls and room IDs into your synthesized_instruction.
+Only fall back to visual interpretation for annotations marked as "Unrecognized gesture".
+
+═══ VISUAL ANNOTATIONS (RED PENCIL) — FALLBACK ONLY ═══
+Use these rules ONLY if no structured annotation data is present or for "Unrecognized gesture" annotations:
 - Red arrow from room A to room B → User wants room A expanded to touch room B.
-- Red arrow or line on specific wall(s) → User wants to push/pull those exact walls. If a line spans MULTIPLE rooms (e.g., west walls of bedrooms and bathrooms), you MUST name ALL THOSE ROOMS in your instruction. Example: "Expand the west walls of bedroom-3, master-bathroom, and master-bedroom by 150cm using reshape_room_boundary for each." Estimate the distance_cm yourself. NEVER suggest resize_room for wall pulling.
+- Red arrow or line on specific wall(s) → User wants to push/pull those exact walls. If a line spans MULTIPLE rooms, name ALL rooms. NEVER suggest resize_room for wall pulling.
 - Scribble/X over a room → User wants to delete the room.
 
-If you see an annotation, prioritize it over vague text. 
+If you see an annotation, prioritize it over vague text.
 
 ═══ OUTPUT FORMAT ═══
 You must output ONLY raw JSON. Do not include markdown blocks.
@@ -3053,7 +3147,7 @@ serve(async (req: any) => {
 
   try {
     const body = await req.json();
-    const { messages: userMessages, mode, roomState, floorPlan, roomName, canvasScreenshot, images: userImages, hasReferenceSketch, hasAnnotations } = body;
+    const { messages: userMessages, mode, roomState, floorPlan, roomName, canvasScreenshot, images: userImages, hasReferenceSketch, hasAnnotations, annotationAnalysis } = body;
 
     if (!userMessages || !Array.isArray(userMessages) || userMessages.length === 0) {
       return new Response(JSON.stringify({ error: "No messages provided." }), {
@@ -3082,6 +3176,39 @@ serve(async (req: any) => {
     const hasVisualContent = hasUserImages || hasAnnotations;
 
     if (isFloorPlanMode) {
+      // ── Supervisor bypass: if client sent fully-resolved annotation intents, skip the Supervisor ──
+      const hasResolvedAnnotations = annotationAnalysis
+        && Array.isArray(annotationAnalysis)
+        && annotationAnalysis.length > 0
+        && annotationAnalysis.every((a: any) => a.intent?.action && a.intent.action !== "unknown");
+
+      if (hasResolvedAnnotations) {
+        selectedAgent = "MODIFIER_AGENT";
+        const lastUserMsg = userMessages[userMessages.length - 1];
+        const userText = typeof lastUserMsg.content === "string" ? lastUserMsg.content : "";
+        // Strip the [ANNOTATION ANALYSIS ...] block from user text since we build our own instruction
+        const cleanUserText = userText.replace(/\[ANNOTATION ANALYSIS[^\]]*\]\s*/s, "").trim();
+        const actionSteps = annotationAnalysis.map((a: any, i: number) => {
+          const n = i + 1;
+          const intent = a.intent;
+          switch (intent.action) {
+            case "reshape":
+              return `${n}. Call reshape_room_boundary with room_id="${intent.roomId}" (${intent.roomName}), wall="${intent.wall}", distance_cm=${intent.distanceCm}`;
+            case "snap":
+              return `${n}. Call snap_rooms_together with room_id="${intent.sourceRoomId}" (${intent.sourceRoomName}), target_room_id="${intent.targetRoomId}" (${intent.targetRoomName})`;
+            case "move":
+              return `${n}. Call move_room with room_id="${intent.roomId}" (${intent.roomName}), x=${intent.targetX}, y=${intent.targetY}`;
+            case "remove":
+              return `${n}. Call remove_room with room_id="${intent.roomId}" (${intent.roomName})`;
+            default: return "";
+          }
+        }).filter(Boolean);
+        const userContext = cleanUserText ? `\nUser's message: "${cleanUserText}"` : "";
+        synthesizedInstruction = `Execute these annotation-based actions in order:\n${actionSteps.join("\n")}${userContext}\n\nAfter all actions, call validate_floor_plan.`;
+        console.log("Supervisor BYPASSED — using resolved annotation intents:", synthesizedInstruction);
+      }
+
+      if (!hasResolvedAnnotations) {
       const lastUserMsg = userMessages[userMessages.length - 1];
       const allImages: string[] = [];
       if (canvasScreenshot && currentFloorPlan.rooms.length > 0) {
@@ -3132,6 +3259,7 @@ serve(async (req: any) => {
         selectedAgent = "MODIFIER_AGENT";
         synthesizedInstruction = messageText;
       }
+      } // end if (!hasResolvedAnnotations)
     }
 
     const systemPrompt = isFloorPlanMode

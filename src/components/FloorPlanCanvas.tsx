@@ -17,6 +17,7 @@ export interface FloorPlanCanvasHandle {
   hasAnnotations: () => boolean;
   clearAnnotations: () => void;
   getAnnotationCount: () => number;
+  getAnnotations: () => { id: string; points: { x: number; y: number }[] }[];
 }
 
 const WALL_THICKNESS = 8;
@@ -64,6 +65,7 @@ const FloorPlanCanvas = forwardRef<FloorPlanCanvasHandle, FloorPlanCanvasProps>(
       hasAnnotations: () => annotations.filter(a => a.id !== "__drawing__").length > 0,
       clearAnnotations: () => setAnnotations([]),
       getAnnotationCount: () => annotations.filter(a => a.id !== "__drawing__").length,
+      getAnnotations: () => annotations.filter(a => a.id !== "__drawing__"),
     }));
 
     // Notify parent when annotation count changes

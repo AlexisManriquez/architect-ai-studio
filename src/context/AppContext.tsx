@@ -4,6 +4,8 @@ import type { RoomState, ChatMessage } from "@/types/room";
 import type { FloorPlan, FloorPlanRoom, AppMode } from "@/types/floorplan";
 import type { ActionEntry } from "@/components/ActionLog";
 import { captureSvgAsBase64 } from "@/lib/canvasCapture";
+import { analyzeAnnotations, buildAnnotationSignal, allIntentsResolved, buildSynthesizedInstruction } from "@/lib/annotationAnalyzer";
+import type { AnnotationAnalysis } from "@/lib/annotationAnalyzer";
 import { toast } from "sonner";
 
 function createEmptyFloorPlan(): FloorPlan {
@@ -23,6 +25,7 @@ interface FloorPlanCanvasRef {
   hasAnnotations: () => boolean;
   clearAnnotations: () => void;
   getAnnotationCount: () => number;
+  getAnnotations: () => { id: string; points: { x: number; y: number }[] }[];
 }
 
 interface AppContextValue {
@@ -150,19 +153,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const annotationsPresent = mode === "floorplan"
         && floorPlanCanvasRef.current?.hasAnnotations?.() || false;
 
+      // Analyze annotations geometrically BEFORE clearing them
+      let annotationAnalysisData: AnnotationAnalysis[] = [];
+      if (annotationsPresent && floorPlanCanvasRef.current?.getAnnotations) {
+        const rawAnnotations = floorPlanCanvasRef.current.getAnnotations();
+        annotationAnalysisData = analyzeAnnotations(rawAnnotations, floorPlan.rooms);
+        console.log("Annotation analysis:", annotationAnalysisData);
+      }
+
       // Clear annotations after screenshot capture (they're baked into the screenshot)
       if (mode === "floorplan" && floorPlanCanvasRef.current?.hasAnnotations?.()) {
         floorPlanCanvasRef.current.clearAnnotations();
       }
 
-      // When annotations are present, inject a signal into the last user message
-      // so the AI is guaranteed to know about them even if visual detection fails
-      const messagesForAI = annotationsPresent
+      // When annotations are present, inject structured analysis into the last user message
+      const annotationSignal = annotationAnalysisData.length > 0
+        ? buildAnnotationSignal(annotationAnalysisData)
+        : "";
+      const messagesForAI = annotationSignal
         ? updatedMessages.map((m, i) => {
             if (i === updatedMessages.length - 1 && m.role === "user") {
               return {
                 role: m.role,
-                content: `[ANNOTATION: The user has drawn a RED annotation on the floor plan canvas. Look carefully at the red marking(s) in the screenshot image. If you see a red ARROW pointing FROM one room TOWARD another room, call snap_rooms_together(source_room_id, target_room_id) — do NOT call connect_rooms or move_room.]\n\n${m.content}`,
+                content: `${annotationSignal}\n\n${m.content}`,
               };
             }
             return { role: m.role, content: m.content };
@@ -176,6 +189,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         images: userImages,
         hasReferenceSketch: false,
         hasAnnotations: annotationsPresent,
+        annotationAnalysis: annotationAnalysisData.length > 0 ? annotationAnalysisData : undefined,
       };
 
       if (mode === "floorplan") {
