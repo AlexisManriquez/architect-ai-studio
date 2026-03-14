@@ -3584,6 +3584,7 @@ Use these rules ONLY if no structured annotation data is present:
 - Red circle or loop drawn overlapping two rooms → snap_rooms_together(A, B)
 - Red arrow on a specific wall → reshape_room_boundary for that room/wall
 - Scribble/X over a room → remove_room
+- Mark on a wall (circle, line, dot) + text mentioning window/door/opening → add_wall_attachment
 - Unclear or ambiguous mark → set "actions": [] and in synthesized_instruction tell the user you couldn't identify the gesture and ask them to redraw it more clearly (straight arrow to expand, X to delete, circle around two rooms to connect) or describe in text
 
 ═══ OUTPUT FORMAT ═══
