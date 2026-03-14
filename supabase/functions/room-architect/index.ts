@@ -3611,8 +3611,10 @@ ACTIONS RULES:
     remove_room           → { room_id }
     resize_room           → { room_id, target_sqft: number }
     bridge_gap            → { source_room_ids: string[], target_room_ids: string[], direction: "north"|"south"|"east"|"west" }
+    add_wall_attachment   → { type: "window"|"door"|"entryway", room_id, wall: "north"|"south"|"east"|"west", position_percent: number }
     generate_floor_plan   → (only for CREATOR tasks — no room IDs needed)
 - For "close the gap", "fill the space", or "connect these walls" across a large white gap → ALWAYS use bridge_gap to extend the rooms. Do NOT use move_room.
+- For gestures on a wall + text mentioning "window", "door", "opening", "entryway" → use add_wall_attachment. The annotation provides room_id, wall, position_percent; the text provides the type.
 - For "extend/expand/grow X to meet Y" → ALWAYS use snap_rooms_together, NEVER connect_rooms.
 - For "merge/combine/join/connect two rooms into one" → ALWAYS use merge_rooms, NOT snap_rooms_together.
 - If the task is ambiguous or you can't determine exact IDs, set "actions": [] and rely on synthesized_instruction.
