@@ -3409,6 +3409,7 @@ IMPORTANT: You are receiving SYNTHESIZED INSTRUCTIONS from a Supervisor (or from
   - NEVER use for "extend", "expand", "grow", or "meet" — use snap_rooms_together instead
   - NEVER use on structural rooms (living room, garage, entry, hallway, kitchen, dining room)
 
+**bridge_gap(source_room_ids, target_room_ids, direction)** — STRETCHES rooms across empty space to meet another set of rooms. Use this instead of move_room when closing large white spaces between two groups of rooms.
 **resize_room(room_id, target_sqft)** — Resize by square footage. NEVER use for wall pushing.
 **move_room(room_id, x, y)** — Move room to absolute coordinates. Do NOT use to expand.
 
