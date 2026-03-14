@@ -408,6 +408,8 @@ export function buildAnnotationSignal(analyses: AnnotationAnalysis[]): string {
         return `${n}. Scribble/X over ${a.intent.roomName} [id:${a.intent.roomId}] → remove_room(room_id="${a.intent.roomId}")`;
       case "close_gap":
         return `${n}. Circle over region (${Math.round(a.intent.box.minX)},${Math.round(a.intent.box.minY)})-(${Math.round(a.intent.box.maxX)},${Math.round(a.intent.box.maxY)}) → close_gap(minX=${Math.round(a.intent.box.minX)}, minY=${Math.round(a.intent.box.minY)}, maxX=${Math.round(a.intent.box.maxX)}, maxY=${Math.round(a.intent.box.maxY)}, axis="${a.intent.axis}")`;
+      case "place_at_anchor":
+        return `${n}. Gesture on ${a.intent.roomName} [id:${a.intent.roomId}] ${a.intent.wall} wall at ${a.intent.positionPercent}% → add_wall_attachment(room_id="${a.intent.roomId}", wall="${a.intent.wall}", position_percent=${a.intent.positionPercent}). The user's text specifies WHAT to place (window, door, or entryway).`;
       case "unknown":
         return `${n}. Unrecognized gesture — stroke shape was ambiguous (not clearly an arrow or scribble). Ask the user to redraw this annotation more clearly, or describe what they want in text.`;
     }
