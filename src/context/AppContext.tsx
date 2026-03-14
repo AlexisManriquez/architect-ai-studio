@@ -3,7 +3,7 @@ import { getStoredApiKey } from "@/components/ApiKeySettings";
 import type { RoomState, ChatMessage } from "@/types/room";
 import type { FloorPlan, FloorPlanRoom, AppMode } from "@/types/floorplan";
 import type { ActionEntry } from "@/components/ActionLog";
-import { captureSvgAsBase64 } from "@/lib/canvasCapture";
+import { captureSvgAsBase64, captureFloorPlanSvgAsBase64 } from "@/lib/canvasCapture";
 import { analyzeAnnotations, buildAnnotationSignal, allIntentsResolved, buildSynthesizedInstruction } from "@/lib/annotationAnalyzer";
 import type { AnnotationAnalysis } from "@/lib/annotationAnalyzer";
 import { toast } from "sonner";
@@ -143,7 +143,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const svg = mode === "floorplan"
             ? floorPlanCanvasRef.current?.getSvgElement()
             : roomCanvasRef.current?.getSvgElement();
-          if (svg) canvasScreenshot = await captureSvgAsBase64(svg);
+          if (svg) {
+            canvasScreenshot = (mode === "floorplan" && floorPlan.rooms.length > 0)
+              ? await captureFloorPlanSvgAsBase64(svg, floorPlan.rooms)
+              : await captureSvgAsBase64(svg);
+          }
         } catch (err) {
           console.warn("Could not capture screenshot:", err);
         }

@@ -310,7 +310,7 @@ export function buildAnnotationSignal(analyses: AnnotationAnalysis[]): string {
       case "remove":
         return `${n}. Scribble/X over ${a.intent.roomName} [id:${a.intent.roomId}] → remove_room(room_id="${a.intent.roomId}")`;
       case "unknown":
-        return `${n}. Unrecognized gesture — defer to visual interpretation of the screenshot.`;
+        return `${n}. Unrecognized gesture — stroke shape was ambiguous (not clearly an arrow or scribble). Ask the user to redraw this annotation more clearly, or describe what they want in text.`;
     }
   });
 

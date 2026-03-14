@@ -1661,6 +1661,63 @@ function normalizeRoomCoordinates(rooms: FloorPlanRoom[]): FloorPlanRoom[] {
   return rooms.map(r => ({ ...r, x: r.x + shiftX, y: r.y + shiftY }));
 }
 
+// ─── Step 3: Auto-Snapping & Collision Resolution ───────────────────────────
+
+/** Snap a coordinate to the nearest grid increment (default 10cm) */
+function snapToGrid(value: number, grid = 10): number {
+  return Math.round(value / grid) * grid;
+}
+
+/**
+ * After moving a room, push any room it now overlaps out of the way.
+ * Uses the minimum-overlap axis to decide push direction so rooms end up flush.
+ * Runs up to 10 passes to handle cascading collisions.
+ */
+function resolveRoomOverlaps(
+  rooms: FloorPlanRoom[],
+  anchorId: string
+): { rooms: FloorPlanRoom[]; resolved: string[] } {
+  const resolved: string[] = [];
+  let updatedRooms = rooms.map(r => ({ ...r }));
+  let changed = true;
+  let passes = 0;
+
+  while (changed && passes < 10) {
+    changed = false;
+    passes++;
+    const anchor = updatedRooms.find(r => r.id === anchorId)!;
+
+    for (let i = 0; i < updatedRooms.length; i++) {
+      const other = updatedRooms[i];
+      if (other.id === anchorId) continue;
+
+      const overlapX = Math.max(0, Math.min(anchor.x + anchor.width, other.x + other.width) - Math.max(anchor.x, other.x));
+      const overlapY = Math.max(0, Math.min(anchor.y + anchor.height, other.y + other.height) - Math.max(anchor.y, other.y));
+
+      if (overlapX > 1 && overlapY > 1) {
+        // Push in the direction of smallest overlap (least disruption)
+        if (overlapX <= overlapY) {
+          const pushRight = (other.x + other.width / 2) > (anchor.x + anchor.width / 2);
+          updatedRooms[i] = {
+            ...other,
+            x: snapToGrid(pushRight ? anchor.x + anchor.width : anchor.x - other.width),
+          };
+        } else {
+          const pushDown = (other.y + other.height / 2) > (anchor.y + anchor.height / 2);
+          updatedRooms[i] = {
+            ...other,
+            y: snapToGrid(pushDown ? anchor.y + anchor.height : anchor.y - other.height),
+          };
+        }
+        if (!resolved.includes(other.name)) resolved.push(other.name);
+        changed = true;
+      }
+    }
+  }
+
+  return { rooms: updatedRooms, resolved };
+}
+
 // ─── Shared Wall Detection & Cascade Helpers ────────────────────────────────
 const WALL_DETECT_TOLERANCE = 5;
 
@@ -2769,10 +2826,17 @@ function processFloorPlanTool(
       const room = resolveRoomByRef(floorPlan.rooms, roomId);
       if (!room) return { result: JSON.stringify({ success: false, reason: `Room not found: ${roomId}` }), floorPlan };
 
+      // Snap target coords to 10cm grid for clean layouts
+      const targetX = snapToGrid(args.x as number);
+      const targetY = snapToGrid(args.y as number);
+
       let updatedRooms = floorPlan.rooms.map(r =>
-        r.id === room.id ? { ...r, x: Math.round(args.x as number), y: Math.round(args.y as number) } : { ...r }
+        r.id === room.id ? { ...r, x: targetX, y: targetY } : { ...r }
       );
-      updatedRooms = normalizeRoomCoordinates(updatedRooms);
+
+      // Auto-resolve any collisions caused by the move
+      const { rooms: resolvedRooms, resolved } = resolveRoomOverlaps(updatedRooms, room.id);
+      updatedRooms = normalizeRoomCoordinates(resolvedRooms);
 
       const warnings = validateFloorPlanRooms(updatedRooms);
       const totalWidth = Math.max(...updatedRooms.map(r => r.x + r.width));
@@ -2792,11 +2856,12 @@ function processFloorPlanTool(
       return {
         result: JSON.stringify({
           success: true,
+          collisions_resolved: resolved.length > 0 ? resolved : undefined,
           warnings: warnings.length > 0 ? warnings : undefined,
           repairs: repairs.length > 0 ? repairs : undefined,
         }),
         floorPlan: repairedPlan,
-        action: `Moved ${room.name}`,
+        action: `Moved ${room.name}${resolved.length > 0 ? ` (pushed ${resolved.join(", ")} to prevent overlap)` : ""}`,
       };
     }
 
@@ -3103,6 +3168,7 @@ IMPORTANT: You are receiving SYNTHESIZED INSTRUCTIONS from a Supervisor (or from
 1. If the instruction contains exact tool calls (from annotation analysis), execute them EXACTLY as specified.
 2. ALWAYS call validate_floor_plan after modifications.
 3. Be conversational and brief in your text response.
+4. If the instruction mentions an "Unrecognized gesture", do NOT guess what it meant. Instead, tell the user warmly that you couldn't identify that particular drawing and ask them to try again — either redraw it more clearly (e.g., a straight arrow for expand, an X for delete) or just describe what they want in text.
 ${commonContext}`;
 }
 
@@ -3114,33 +3180,56 @@ function buildSupervisorSystemPrompt(floorPlan: FloorPlan): string {
       ).join("\n");
 
   return `You are the Supervisor Router for an AI Architectural Floor Plan App.
-Your ONLY job is to analyze the user's intent (and any RED PENCIL VISUAL ANNOTATIONS on the screenshot) and determine if this is a CREATOR task (generating a new house from scratch) or a MODIFIER task (editing an existing floor plan layout).
+Your ONLY job is to analyze the user's intent and determine if this is a CREATOR task (generating a new floor plan) or a MODIFIER task (editing an existing layout).
+
+═══ ROOM ID BADGES ═══
+Every room in the screenshot has a small dark badge in its top-left corner showing: id:XXXXXXXX
+That 8-char suffix matches the END of the full room ID listed in "Current Floor Plan Context" below.
+Use these badges to identify WHICH room the user is referring to, then use the FULL ID from context in your "actions" array.
 
 ═══ STRUCTURED ANNOTATION DATA ═══
-If the user message contains [ANNOTATION ANALYSIS ...], those are PRECISE, PROGRAMMATICALLY COMPUTED instructions derived from coordinate geometry — NOT visual guesswork.
-TRUST THEM OVER YOUR OWN VISUAL INTERPRETATION. Copy the exact tool calls and room IDs into your synthesized_instruction.
+If the user message contains [ANNOTATION ANALYSIS ...], those are PRECISE, PROGRAMMATICALLY COMPUTED instructions.
+TRUST THEM COMPLETELY. Copy the exact room IDs into your "actions" array.
 Only fall back to visual interpretation for annotations marked as "Unrecognized gesture".
 
 ═══ VISUAL ANNOTATIONS (RED PENCIL) — FALLBACK ONLY ═══
-Use these rules ONLY if no structured annotation data is present or for "Unrecognized gesture" annotations:
-- Red arrow from room A to room B → User wants room A expanded to touch room B.
-- Red arrow or line on specific wall(s) → User wants to push/pull those exact walls. If a line spans MULTIPLE rooms, name ALL rooms. NEVER suggest resize_room for wall pulling.
-- Scribble/X over a room → User wants to delete the room.
-
-If you see an annotation, prioritize it over vague text.
+Use these rules ONLY if no structured annotation data is present:
+- Red arrow from room A to room B → snap_rooms_together(A, B)
+- Red arrow on a specific wall → reshape_room_boundary for that room/wall
+- Scribble/X over a room → remove_room
+- Unclear or ambiguous mark → set "actions": [] and in synthesized_instruction tell the user you couldn't identify the gesture and ask them to redraw it more clearly (straight arrow to expand, X to delete) or describe in text
 
 ═══ OUTPUT FORMAT ═══
-You must output ONLY raw JSON. Do not include markdown blocks.
+You must output ONLY raw JSON. No markdown, no code blocks.
 {
   "selected_agent": "CREATOR_AGENT" | "MODIFIER_AGENT",
-  "reasoning": "Explain what the user wants based on the text and visual annotations.",
-  "synthesized_instruction": "A PERFECT, crystal clear instruction for the sub-agent. For 'extend/expand/grow X to Y' ALWAYS use snap_rooms_together. NEVER use connect_rooms for extend/expand. Examples: 'generate a 3 bed 2 bath 2000 sqft house', 'expand the garage to meet the master bedroom using snap_rooms_together(garage_id, master_bedroom_id)', 'extend the hallway to meet the living room using snap_rooms_together(hallway_id, living_room_id)', 'move the north wall of bedroom-2 up by 150cm using reshape_room_boundary'."
+  "reasoning": "Brief explanation of what the user wants.",
+  "synthesized_instruction": "Natural language fallback description of what to do.",
+  "actions": [
+    {
+      "tool": "snap_rooms_together",
+      "args": { "room_id": "FULL_ID_FROM_CONTEXT", "target_room_id": "FULL_ID_FROM_CONTEXT" }
+    }
+  ]
 }
+
+ACTIONS RULES:
+- "actions" must be an array of tool calls with exact full room IDs from context (not the 8-char badge suffix).
+- Available tools and required args:
+    snap_rooms_together   → { room_id, target_room_id }
+    reshape_room_boundary → { room_id, wall: "north"|"south"|"east"|"west", distance_cm: number }
+    move_room             → { room_id, x: number, y: number }
+    remove_room           → { room_id }
+    resize_room           → { room_id, target_sqft: number }
+    generate_floor_plan   → (only for CREATOR tasks — no room IDs needed)
+- For "extend/expand/grow X to meet Y" → ALWAYS use snap_rooms_together, NEVER connect_rooms.
+- If the task is ambiguous or you can't determine exact IDs, set "actions": [] and rely on synthesized_instruction.
+- For CREATOR tasks, set "actions": [].
 
 Current Floor Plan Context:
 ${roomsSummary}
 
-Look carefully at the image for red markings!`;
+Look carefully at the image for red pencil markings and room ID badges!`;
 }
 
 function buildRoomSystemPrompt(roomState: RoomState, roomName: string): string {
@@ -3296,8 +3385,49 @@ serve(async (req: any) => {
       try {
         const parsed = JSON.parse(supervisorData.choices[0].message.content);
         selectedAgent = parsed.selected_agent || "MODIFIER_AGENT";
-        synthesizedInstruction = parsed.synthesized_instruction || messageText;
         console.log("Supervisor output:", parsed);
+
+        // ── Step 2: Validate structured actions from Supervisor ──
+        const supervisorActions: any[] = Array.isArray(parsed.actions) ? parsed.actions : [];
+        const roomIdSet = new Set(currentFloorPlan.rooms.map((r: any) => r.id));
+        const roomNameMap = new Map(currentFloorPlan.rooms.map((r: any) => [r.id, r.name]));
+
+        const actionsAreValid = supervisorActions.length > 0 && supervisorActions.every((action: any) => {
+          const args = action.args || {};
+          if (args.room_id && !roomIdSet.has(args.room_id)) return false;
+          if (args.target_room_id && !roomIdSet.has(args.target_room_id)) return false;
+          return true;
+        });
+
+        if (actionsAreValid) {
+          // Build deterministic instruction from validated structured actions — no ID guessing
+          const steps = supervisorActions.map((action: any, i: number) => {
+            const n = i + 1;
+            const args = action.args || {};
+            const rName = (id: string) => roomNameMap.get(id) || id;
+            switch (action.tool) {
+              case "snap_rooms_together":
+                return `${n}. Call snap_rooms_together with room_id="${args.room_id}" (${rName(args.room_id)}), target_room_id="${args.target_room_id}" (${rName(args.target_room_id)})`;
+              case "reshape_room_boundary":
+                return `${n}. Call reshape_room_boundary with room_id="${args.room_id}" (${rName(args.room_id)}), wall="${args.wall}", distance_cm=${args.distance_cm}`;
+              case "move_room":
+                return `${n}. Call move_room with room_id="${args.room_id}" (${rName(args.room_id)}), x=${args.x}, y=${args.y}`;
+              case "remove_room":
+                return `${n}. Call remove_room with room_id="${args.room_id}" (${rName(args.room_id)})`;
+              case "resize_room":
+                return `${n}. Call resize_room with room_id="${args.room_id}" (${rName(args.room_id)}), target_sqft=${args.target_sqft}`;
+              default: return "";
+            }
+          }).filter(Boolean);
+          synthesizedInstruction = `Execute these actions in order:\n${steps.join("\n")}\n\nAfter all actions, call validate_floor_plan.`;
+          console.log("Supervisor provided validated structured actions — deterministic path:", synthesizedInstruction);
+        } else {
+          // Fall back to natural language instruction
+          if (supervisorActions.length > 0) {
+            console.warn("Supervisor actions contained invalid room IDs — falling back to prose instruction");
+          }
+          synthesizedInstruction = parsed.synthesized_instruction || messageText;
+        }
       } catch (e) {
         console.warn("Supervisor parsing failed:", e);
         selectedAgent = "MODIFIER_AGENT";
