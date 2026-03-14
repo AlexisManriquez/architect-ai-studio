@@ -1400,6 +1400,25 @@ If issues are found, you MUST fix them by adding doors, moving rooms, or restruc
       parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "merge_rooms",
+      description: `Combines two adjacent rooms into a single larger room by removing the shared wall. Use whenever the user asks to 'merge', 'combine', 'join', or 'connect' two specific rooms into one unified space.
+
+Do NOT use for closing gaps — use snap_rooms_together for that.
+Do NOT use if the user just wants them side-by-side — use connect_rooms for that.`,
+      parameters: {
+        type: "object",
+        properties: {
+          room_1: { type: "string", description: "ID of the first room to merge" },
+          room_2: { type: "string", description: "ID of the second room to merge" },
+        },
+        required: ["room_1", "room_2"],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 // ─── Furniture Tools ────────────────────────────────────────────────────────
@@ -2863,6 +2882,62 @@ function processFloorPlanTool(
       };
     }
 
+    case "merge_rooms": {
+      const r1Ref = args.room_1 as string;
+      const r2Ref = args.room_2 as string;
+      const room1 = resolveRoomByRef(floorPlan.rooms, r1Ref);
+      const room2 = resolveRoomByRef(floorPlan.rooms, r2Ref);
+
+      if (!room1) return { result: JSON.stringify({ success: false, reason: `Room not found: ${r1Ref}` }), floorPlan };
+      if (!room2) return { result: JSON.stringify({ success: false, reason: `Room not found: ${r2Ref}` }), floorPlan };
+
+      // Expand room1's bounding box to encompass both rooms
+      const minX = Math.min(room1.x, room2.x);
+      const minY = Math.min(room1.y, room2.y);
+      const maxX = Math.max(room1.x + room1.width, room2.x + room2.width);
+      const maxY = Math.max(room1.y + room1.height, room2.y + room2.height);
+
+      const mergedRoom: FloorPlanRoom = {
+        ...room1,
+        x: minX,
+        y: minY,
+        width: maxX - minX,
+        height: maxY - minY,
+        name: `${room1.name} / ${room2.name}`,
+      };
+
+      // Remove room2, update room1 to the merged bounding box
+      const updatedRooms = floorPlan.rooms
+        .filter(r => r.id !== room2.id)
+        .map(r => r.id === room1.id ? mergedRoom : r);
+
+      // Drop the shared wall door; re-home room2's external doors to room1
+      const updatedDoors = floorPlan.doors
+        .filter(d =>
+          !((d.roomId1 === room1.id && d.roomId2 === room2.id) ||
+            (d.roomId1 === room2.id && d.roomId2 === room1.id))
+        )
+        .map(d => {
+          if (d.roomId1 === room2.id) return { ...d, roomId1: room1.id };
+          if (d.roomId2 === room2.id) return { ...d, roomId2: room1.id };
+          return d;
+        });
+
+      // Re-home room2's windows to room1
+      const updatedWindows = floorPlan.windows.map(w =>
+        w.roomId === room2.id ? { ...w, roomId: room1.id } : w
+      );
+
+      const mergedPlan: FloorPlan = { ...floorPlan, rooms: updatedRooms, doors: updatedDoors, windows: updatedWindows };
+      const { plan: repairedPlan, repairs } = autoRepairFloorPlan(mergedPlan);
+
+      return {
+        result: JSON.stringify({ success: true, actions: [`Merged "${room1.name}" and "${room2.name}" into one room`, ...repairs] }),
+        floorPlan: repairedPlan,
+        action: `Merged "${room1.name}" and "${room2.name}" into a single room`,
+      };
+    }
+
     case "connect_rooms": {
       const roomRef1 = args.room_1 as string;
       const roomRef2 = args.room_2 as string;
@@ -3149,6 +3224,10 @@ IMPORTANT: You are receiving SYNTHESIZED INSTRUCTIONS from a Supervisor (or from
   - Closing gaps between rooms
   This tool KEEPS all rooms in place and just grows one room. It is SAFE.
 
+**merge_rooms(room_1, room_2)** — COMBINE two rooms into one unified open space by removing the shared wall. Use for:
+  - "merge", "combine", "join", "connect" two rooms into one
+  - If snap_rooms_together fails because rooms already touch, and the user's intent is to unify the space, call merge_rooms immediately.
+
 **reshape_room_boundary(room_id, wall, distance_cm)** — Move a SPECIFIC wall by an exact distance. Use for:
   - "push/pull/drag the north wall", "expand bedroom east by 2m"
   - Annotation arrows on a specific wall
@@ -3164,9 +3243,10 @@ IMPORTANT: You are receiving SYNTHESIZED INSTRUCTIONS from a Supervisor (or from
 
 ═══ RULES ═══
 1. If the instruction contains exact tool calls (from annotation analysis), execute them EXACTLY as specified.
-2. ALWAYS call validate_floor_plan after modifications.
-3. Be conversational and brief in your text response.
-4. If the instruction mentions an "Unrecognized gesture", do NOT guess what it meant. Instead, tell the user warmly that you couldn't identify that particular drawing and ask them to try again — either redraw it more clearly (e.g., a straight arrow for expand, an X for delete) or just describe what they want in text.
+2. THE MERGE OVERRIDE: If an annotation directs you to call snap_rooms_together, but the user's text says "merge", "combine", "join", or "connect" — execute the snap first. If snap fails because rooms already touch (distanceCm = 0), IMMEDIATELY call merge_rooms to unify them. Do not stop at the failure.
+3. ALWAYS call validate_floor_plan after modifications.
+4. Be conversational and brief in your text response.
+5. If the instruction mentions an "Unrecognized gesture", do NOT guess what it meant. Instead, tell the user warmly that you couldn't identify that particular drawing and ask them to try again — either redraw it more clearly (e.g., a straight arrow for expand, an X for delete, a circle around two rooms to connect) or just describe what they want in text.
 ${commonContext}`;
 }
 
@@ -3193,9 +3273,10 @@ Only fall back to visual interpretation for annotations marked as "Unrecognized 
 ═══ VISUAL ANNOTATIONS (RED PENCIL) — FALLBACK ONLY ═══
 Use these rules ONLY if no structured annotation data is present:
 - Red arrow from room A to room B → snap_rooms_together(A, B)
+- Red circle or loop drawn overlapping two rooms → snap_rooms_together(A, B)
 - Red arrow on a specific wall → reshape_room_boundary for that room/wall
 - Scribble/X over a room → remove_room
-- Unclear or ambiguous mark → set "actions": [] and in synthesized_instruction tell the user you couldn't identify the gesture and ask them to redraw it more clearly (straight arrow to expand, X to delete) or describe in text
+- Unclear or ambiguous mark → set "actions": [] and in synthesized_instruction tell the user you couldn't identify the gesture and ask them to redraw it more clearly (straight arrow to expand, X to delete, circle around two rooms to connect) or describe in text
 
 ═══ OUTPUT FORMAT ═══
 You must output ONLY raw JSON. No markdown, no code blocks.
@@ -3215,12 +3296,14 @@ ACTIONS RULES:
 - "actions" must be an array of tool calls with exact full room IDs from context (not the 8-char badge suffix).
 - Available tools and required args:
     snap_rooms_together   → { room_id, target_room_id }
+    merge_rooms           → { room_1, room_2 }  ← only for explicit "merge/combine/join into one room"
     reshape_room_boundary → { room_id, wall: "north"|"south"|"east"|"west", distance_cm: number }
     move_room             → { room_id, x: number, y: number }
     remove_room           → { room_id }
     resize_room           → { room_id, target_sqft: number }
     generate_floor_plan   → (only for CREATOR tasks — no room IDs needed)
 - For "extend/expand/grow X to meet Y" → ALWAYS use snap_rooms_together, NEVER connect_rooms.
+- For "merge/combine/join/connect two rooms into one" → ALWAYS use merge_rooms, NOT snap_rooms_together.
 - If the task is ambiguous or you can't determine exact IDs, set "actions": [] and rely on synthesized_instruction.
 - For CREATOR tasks, set "actions": [].
 

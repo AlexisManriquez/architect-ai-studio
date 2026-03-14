@@ -17,7 +17,7 @@ export type AnnotationIntent =
   | { action: "unknown" };
 
 export interface AnnotationAnalysis {
-  type: "arrow" | "scribble" | "unknown";
+  type: "arrow" | "scribble" | "circle" | "unknown";
   startPoint: { x: number; y: number };
   endPoint: { x: number; y: number };
   intent: AnnotationIntent;
@@ -66,7 +66,7 @@ function countSelfIntersections(points: { x: number; y: number }[]): number {
 
 // ─── Stroke Classification ─────────────────────────────────────────────────
 
-function classifyStroke(points: { x: number; y: number }[]): "arrow" | "scribble" | "unknown" {
+function classifyStroke(points: { x: number; y: number }[]): "arrow" | "scribble" | "circle" | "unknown" {
   if (points.length < 2) return "unknown";
 
   const pathLen = totalPathLength(points);
@@ -75,7 +75,11 @@ function classifyStroke(points: { x: number; y: number }[]): "arrow" | "scribble
   const directDist = dist(points[0], points[points.length - 1]);
   const linearity = directDist / pathLen;
 
+  // A closed loop: start and end are close but the path itself is long
+  const isClosedLoop = directDist < 40 && pathLen > 100;
+
   if (linearity > 0.6) return "arrow";
+  if (isClosedLoop) return "circle";
   if (countSelfIntersections(points) >= 2) return "scribble";
   return "unknown";
 }
@@ -268,6 +272,38 @@ function resolveScribbleIntent(
   return { action: "unknown" };
 }
 
+// ─── Circle Intent Resolution ───────────────────────────────────────────────
+
+function resolveCircleIntent(
+  points: { x: number; y: number }[],
+  rooms: FloorPlanRoom[]
+): AnnotationIntent {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+
+  // Find rooms whose bounding box intersects the circle's bounding box
+  const intersectedRooms = rooms.filter(r =>
+    !(r.x + r.width < minX || r.x > maxX || r.y + r.height < minY || r.y > maxY)
+  );
+
+  if (intersectedRooms.length === 2) {
+    return {
+      action: "snap",
+      sourceRoomId: intersectedRooms[0].id,
+      sourceRoomName: intersectedRooms[0].name,
+      targetRoomId: intersectedRooms[1].id,
+      targetRoomName: intersectedRooms[1].name,
+    };
+  }
+
+  return { action: "unknown" };
+}
+
 // ─── Main Analysis ──────────────────────────────────────────────────────────
 
 export function analyzeAnnotations(
@@ -289,6 +325,9 @@ export function analyzeAnnotations(
           break;
         case "scribble":
           intent = resolveScribbleIntent(points, rooms);
+          break;
+        case "circle":
+          intent = resolveCircleIntent(points, rooms);
           break;
         default:
           intent = { action: "unknown" };
