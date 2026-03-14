@@ -15,6 +15,7 @@ export type AnnotationIntent =
   | { action: "move"; roomId: string; roomName: string; targetX: number; targetY: number }
   | { action: "remove"; roomId: string; roomName: string }
   | { action: "close_gap"; box: { minX: number; minY: number; maxX: number; maxY: number }; axis: "x" | "y" }
+  | { action: "place_at_anchor"; roomId: string; roomName: string; wall: Wall; positionPercent: number }
   | { action: "unknown" };
 
 export interface AnnotationAnalysis {
