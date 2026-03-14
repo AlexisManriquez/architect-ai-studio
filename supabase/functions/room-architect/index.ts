@@ -3295,34 +3295,40 @@ function processFloorPlanTool(
       
       if (!room) return { result: JSON.stringify({ success: false, reason: `Room not found: ${roomRef}` }), floorPlan };
 
-      const defaultWidth = attachType === "window" ? 100 : 90;
+      const defaultWidth = attachType === "window" ? 60 : 90;
       const attachWidth = (args.width as number) || defaultWidth;
-      const halfWidth = attachWidth / 2;
 
-      // Calculate exact coordinates from room geometry + position percent
-      let x: number, y: number;
+      // ── calculateAttachmentCoords ──
+      // Treats the wall as a 1D segment. Clamp 5–95% to prevent corner placement.
+      const clampedPercent = Math.max(5, Math.min(95, posPercent)) / 100;
+      let x = 0, y = 0;
       let orientation: "horizontal" | "vertical";
 
-      if (wall === "north") {
-        x = room.x + (room.width * posPercent / 100) - halfWidth;
-        y = room.y;
-        orientation = "horizontal";
-      } else if (wall === "south") {
-        x = room.x + (room.width * posPercent / 100) - halfWidth;
-        y = room.y + room.height;
-        orientation = "horizontal";
-      } else if (wall === "west") {
-        x = room.x;
-        y = room.y + (room.height * posPercent / 100) - halfWidth;
-        orientation = "vertical";
-      } else { // east
-        x = room.x + room.width;
-        y = room.y + (room.height * posPercent / 100) - halfWidth;
-        orientation = "vertical";
+      switch (wall) {
+        case "north":
+          x = room.x + room.width * clampedPercent - attachWidth / 2;
+          y = room.y;
+          orientation = "horizontal";
+          break;
+        case "south":
+          x = room.x + room.width * clampedPercent - attachWidth / 2;
+          y = room.y + room.height;
+          orientation = "horizontal";
+          break;
+        case "west":
+          x = room.x;
+          y = room.y + room.height * clampedPercent - attachWidth / 2;
+          orientation = "vertical";
+          break;
+        case "east":
+          x = room.x + room.width;
+          y = room.y + room.height * clampedPercent - attachWidth / 2;
+          orientation = "vertical";
+          break;
       }
 
-      // Clamp to wall boundaries
-      if (orientation === "horizontal") {
+      // Final clamp: ensure the attachment stays within wall boundaries
+      if (orientation! === "horizontal") {
         x = Math.max(room.x, Math.min(x, room.x + room.width - attachWidth));
       } else {
         y = Math.max(room.y, Math.min(y, room.y + room.height - attachWidth));
@@ -3338,13 +3344,13 @@ function processFloorPlanTool(
           x,
           y,
           width: attachWidth,
-          orientation,
+          orientation: orientation!,
           wall,
         };
         return {
           result: JSON.stringify({ success: true, window_id: newWindow.id }),
           floorPlan: { ...floorPlan, windows: [...floorPlan.windows, newWindow] },
-          action: `Added window on ${room.name}'s ${wall} wall at ${posPercent}%`,
+          action: `Added ${attachWidth}cm window to the ${wall} wall of ${room.name}`,
         };
       } else {
         // door or entryway
@@ -3352,19 +3358,19 @@ function processFloorPlanTool(
         const newDoor: FloorPlanDoor = {
           id: generateId(),
           roomId1: room.id,
-          roomId2: isExterior ? "exterior" : "exterior", // Will be updated by auto-repair if shared wall exists
+          roomId2: "exterior",
           x,
           y,
           width: attachWidth,
-          orientation,
+          orientation: orientation!,
           isOpening: attachType === "entryway",
         };
 
-        // Check if there's an adjacent room on this wall — if so, connect to it
+        // Auto-detect adjacent room on this wall for interior doors
         if (!isExterior) {
+          const SNAP = 5;
           for (const otherRoom of floorPlan.rooms) {
             if (otherRoom.id === room.id) continue;
-            const SNAP = 5;
             let isAdjacent = false;
             if (wall === "north" && Math.abs(otherRoom.y + otherRoom.height - room.y) < SNAP) isAdjacent = true;
             if (wall === "south" && Math.abs(room.y + room.height - otherRoom.y) < SNAP) isAdjacent = true;
@@ -3380,7 +3386,7 @@ function processFloorPlanTool(
         return {
           result: JSON.stringify({ success: true, door_id: newDoor.id }),
           floorPlan: { ...floorPlan, doors: [...floorPlan.doors, newDoor] },
-          action: `Added ${attachType} on ${room.name}'s ${wall} wall at ${posPercent}%`,
+          action: `Added ${attachType} to the ${wall} wall of ${room.name}`,
         };
       }
     }
