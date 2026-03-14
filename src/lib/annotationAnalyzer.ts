@@ -14,6 +14,7 @@ export type AnnotationIntent =
   | { action: "snap"; sourceRoomId: string; sourceRoomName: string; targetRoomId: string; targetRoomName: string }
   | { action: "move"; roomId: string; roomName: string; targetX: number; targetY: number }
   | { action: "remove"; roomId: string; roomName: string }
+  | { action: "close_gap"; box: { minX: number; minY: number; maxX: number; maxY: number }; axis: "x" | "y" }
   | { action: "unknown" };
 
 export interface AnnotationAnalysis {
@@ -276,7 +277,7 @@ function resolveScribbleIntent(
 
 function resolveCircleIntent(
   points: { x: number; y: number }[],
-  rooms: FloorPlanRoom[]
+  _rooms: FloorPlanRoom[]
 ): AnnotationIntent {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of points) {
@@ -286,22 +287,13 @@ function resolveCircleIntent(
     if (p.y > maxY) maxY = p.y;
   }
 
-  // Find rooms whose bounding box intersects the circle's bounding box
-  const intersectedRooms = rooms.filter(r =>
-    !(r.x + r.width < minX || r.x > maxX || r.y + r.height < minY || r.y > maxY)
-  );
+  const boxW = maxX - minX;
+  const boxH = maxY - minY;
 
-  if (intersectedRooms.length === 2) {
-    return {
-      action: "snap",
-      sourceRoomId: intersectedRooms[0].id,
-      sourceRoomName: intersectedRooms[0].name,
-      targetRoomId: intersectedRooms[1].id,
-      targetRoomName: intersectedRooms[1].name,
-    };
-  }
+  // Wide box → gap runs left/right (compress on x); tall box → gap runs up/down (compress on y)
+  const axis: "x" | "y" = boxW > boxH ? "x" : "y";
 
-  return { action: "unknown" };
+  return { action: "close_gap", box: { minX, minY, maxX, maxY }, axis };
 }
 
 // ─── Main Analysis ──────────────────────────────────────────────────────────
@@ -353,6 +345,8 @@ export function buildAnnotationSignal(analyses: AnnotationAnalysis[]): string {
         return `${n}. Arrow indicating move ${a.intent.roomName} [id:${a.intent.roomId}] to position (${a.intent.targetX}, ${a.intent.targetY}) → move_room(room_id="${a.intent.roomId}", x=${a.intent.targetX}, y=${a.intent.targetY})`;
       case "remove":
         return `${n}. Scribble/X over ${a.intent.roomName} [id:${a.intent.roomId}] → remove_room(room_id="${a.intent.roomId}")`;
+      case "close_gap":
+        return `${n}. Circle over region (${Math.round(a.intent.box.minX)},${Math.round(a.intent.box.minY)})-(${Math.round(a.intent.box.maxX)},${Math.round(a.intent.box.maxY)}) → close_gap(minX=${Math.round(a.intent.box.minX)}, minY=${Math.round(a.intent.box.minY)}, maxX=${Math.round(a.intent.box.maxX)}, maxY=${Math.round(a.intent.box.maxY)}, axis="${a.intent.axis}")`;
       case "unknown":
         return `${n}. Unrecognized gesture — stroke shape was ambiguous (not clearly an arrow or scribble). Ask the user to redraw this annotation more clearly, or describe what they want in text.`;
     }
@@ -379,6 +373,8 @@ export function buildSynthesizedInstruction(analyses: AnnotationAnalysis[], user
         return `${n}. Call move_room with room_id="${a.intent.roomId}" (${a.intent.roomName}), x=${a.intent.targetX}, y=${a.intent.targetY}`;
       case "remove":
         return `${n}. Call remove_room with room_id="${a.intent.roomId}" (${a.intent.roomName})`;
+      case "close_gap":
+        return `${n}. Call close_gap with minX=${Math.round(a.intent.box.minX)}, minY=${Math.round(a.intent.box.minY)}, maxX=${Math.round(a.intent.box.maxX)}, maxY=${Math.round(a.intent.box.maxY)}, axis="${a.intent.axis}"`;
       default:
         return "";
     }

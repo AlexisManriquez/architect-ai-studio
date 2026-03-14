@@ -1419,6 +1419,25 @@ Do NOT use if the user just wants them side-by-side — use connect_rooms for th
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "close_gap",
+      description: `Removes empty space inside a circled region by shifting all rooms on one side of the gap toward the other side until walls meet. Use ONLY when annotation data specifies a close_gap action with a bounding box. Do NOT use for named room operations — use snap_rooms_together or merge_rooms for those.`,
+      parameters: {
+        type: "object",
+        properties: {
+          minX: { type: "number", description: "Left edge of the gap region (cm)" },
+          minY: { type: "number", description: "Top edge of the gap region (cm)" },
+          maxX: { type: "number", description: "Right edge of the gap region (cm)" },
+          maxY: { type: "number", description: "Bottom edge of the gap region (cm)" },
+          axis: { type: "string", enum: ["x", "y"], description: "Compression axis: 'x' shifts rooms horizontally, 'y' shifts rooms vertically" },
+        },
+        required: ["minX", "minY", "maxX", "maxY", "axis"],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 // ─── Furniture Tools ────────────────────────────────────────────────────────
@@ -2882,6 +2901,39 @@ function processFloorPlanTool(
       };
     }
 
+    case "close_gap": {
+      const minX = args.minX as number;
+      const minY = args.minY as number;
+      const maxX = args.maxX as number;
+      const maxY = args.maxY as number;
+      const axis = args.axis as "x" | "y";
+
+      let updatedRooms = floorPlan.rooms.map(r => ({ ...r }));
+
+      if (axis === "x") {
+        const gapWidth = maxX - minX;
+        // Shift all rooms whose left edge is at or past the gap's right edge
+        updatedRooms = updatedRooms.map(r =>
+          r.x >= maxX - 5 ? { ...r, x: r.x - gapWidth } : r
+        );
+      } else {
+        const gapHeight = maxY - minY;
+        // Shift all rooms whose top edge is at or past the gap's bottom edge
+        updatedRooms = updatedRooms.map(r =>
+          r.y >= maxY - 5 ? { ...r, y: r.y - gapHeight } : r
+        );
+      }
+
+      const newPlan: FloorPlan = { ...floorPlan, rooms: updatedRooms };
+      const { plan: repairedPlan, repairs } = autoRepairFloorPlan(newPlan);
+
+      return {
+        result: JSON.stringify({ success: true, actions: ["Closed gap by shifting rooms", ...repairs] }),
+        floorPlan: repairedPlan,
+        action: `Closed ${axis === "x" ? "horizontal" : "vertical"} gap at region (${minX},${minY})-(${maxX},${maxY})`,
+      };
+    }
+
     case "merge_rooms": {
       const r1Ref = args.room_1 as string;
       const r2Ref = args.room_2 as string;
@@ -3224,6 +3276,8 @@ IMPORTANT: You are receiving SYNTHESIZED INSTRUCTIONS from a Supervisor (or from
   - Closing gaps between rooms
   This tool KEEPS all rooms in place and just grows one room. It is SAFE.
 
+**close_gap(minX, minY, maxX, maxY, axis)** — Shift all rooms on one side of a region to close empty space. Use ONLY when annotation data specifies this tool with exact coordinates. Never call this without annotation-provided coordinates.
+
 **merge_rooms(room_1, room_2)** — COMBINE two rooms into one unified open space by removing the shared wall. Use for:
   - "merge", "combine", "join", "connect" two rooms into one
   - If snap_rooms_together fails because rooms already touch, and the user's intent is to unify the space, call merge_rooms immediately.
@@ -3296,6 +3350,7 @@ ACTIONS RULES:
 - "actions" must be an array of tool calls with exact full room IDs from context (not the 8-char badge suffix).
 - Available tools and required args:
     snap_rooms_together   → { room_id, target_room_id }
+    close_gap             → { minX, minY, maxX, maxY, axis }  ← ONLY from annotation close_gap intents; never call from text alone
     merge_rooms           → { room_1, room_2 }  ← only for explicit "merge/combine/join into one room"
     reshape_room_boundary → { room_id, wall: "north"|"south"|"east"|"west", distance_cm: number }
     move_room             → { room_id, x: number, y: number }
